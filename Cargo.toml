@@ -14,7 +14,7 @@ repository = "https://github.com/mkfnch/PrivacySuite-Core-SDK"
 publish = false
 
 [dependencies]
-# --- Crypto primitives (existing) ---
+# --- Crypto primitives ---
 argon2 = { version = "0.5", default-features = false, features = ["std"] }
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["std"] }
 zeroize = { version = "1.7", features = ["derive"] }
@@ -31,21 +31,21 @@ blake3 = "1"
 base64 = "0.22"
 
 # --- Encrypted storage ---
-rusqlite = { version = "0.32", features = ["bundled-sqlcipher"] }
+rusqlite = { version = "0.36", features = ["bundled-sqlcipher"] }
 
 # --- CRDT sync ---
-automerge = "0.5"
+automerge = "0.8"
 
 # --- OPAQUE authentication ---
 opaque-ke = "3"
 
 # --- Privacy networking + sync ---
 tokio = { version = "1", features = ["rt", "net", "io-util", "sync", "time", "macros"] }
-hickory-resolver = { version = "0.24", features = ["dns-over-https-rustls", "tokio-runtime"] }
-tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+hickory-resolver = { version = "0.25", features = ["https-ring"] }
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
-arti-client = { version = "0.25", default-features = false, features = ["tokio", "native-tls"] }
-tor-rtcompat = { version = "0.25", features = ["tokio", "native-tls"] }
+arti-client = { version = "0.41", default-features = false, features = ["tokio", "native-tls"] }
+tor-rtcompat = { version = "0.41", features = ["tokio", "native-tls"] }
 
 # --- Serialization ---
 serde = { version = "1", features = ["derive"] }

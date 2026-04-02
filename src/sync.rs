@@ -138,7 +138,7 @@ impl SyncTransport for RelayTransport {
         let serialized =
             serde_json::to_vec(msg).map_err(|e| SyncError::Protocol(e.to_string()))?;
         self.ws
-            .send(WsMessage::Binary(serialized))
+            .send(WsMessage::Binary(serialized.into()))
             .await
             .map_err(|e| SyncError::Transport(e.to_string()))
     }

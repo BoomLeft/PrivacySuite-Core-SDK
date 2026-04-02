@@ -20,10 +20,10 @@ use std::fmt;
 use std::net::IpAddr;
 
 use arti_client::{DataStream, TorClient as ArtiTorClient, TorClientConfig};
-use hickory_resolver::config::{
-    NameServerConfig, Protocol, ResolverConfig, ResolverOpts,
-};
-use hickory_resolver::TokioAsyncResolver;
+use hickory_resolver::config::{NameServerConfig, ResolverConfig};
+use hickory_resolver::proto::xfer::Protocol;
+use hickory_resolver::TokioResolver;
+use hickory_resolver::name_server::TokioConnectionProvider;
 use tor_rtcompat::PreferredRuntime;
 
 /// Errors arising from privacy-networking operations.
@@ -81,7 +81,7 @@ pub enum PrivacyTier {
 /// - Quad9 (`9.9.9.9`)
 #[derive(Debug)]
 pub struct PrivacyDns {
-    resolver: TokioAsyncResolver,
+    resolver: TokioResolver,
 }
 
 impl PrivacyDns {
@@ -92,35 +92,31 @@ impl PrivacyDns {
     /// Returns [`NetworkError::DnsResolution`] if the resolver cannot be
     /// constructed (e.g. TLS backend unavailable).
     pub fn new() -> Result<Self, NetworkError> {
-        let cloudflare = NameServerConfig {
-            socket_addr: "1.1.1.1:443".parse().map_err(|e| {
+        let mut cloudflare = NameServerConfig::new(
+            "1.1.1.1:443".parse().map_err(|e| {
                 NetworkError::DnsResolution(format!("bad Cloudflare address: {e}"))
             })?,
-            protocol: Protocol::Https,
-            tls_dns_name: Some("cloudflare-dns.com".to_owned()),
-            trust_negative_responses: false,
-            tls_config: None,
-            bind_addr: None,
-        };
+            Protocol::Https,
+        );
+        cloudflare.tls_dns_name = Some("cloudflare-dns.com".to_owned());
 
-        let quad9 = NameServerConfig {
-            socket_addr: "9.9.9.9:443".parse().map_err(|e| {
+        let mut quad9 = NameServerConfig::new(
+            "9.9.9.9:443".parse().map_err(|e| {
                 NetworkError::DnsResolution(format!("bad Quad9 address: {e}"))
             })?,
-            protocol: Protocol::Https,
-            tls_dns_name: Some("dns.quad9.net".to_owned()),
-            trust_negative_responses: false,
-            tls_config: None,
-            bind_addr: None,
-        };
+            Protocol::Https,
+        );
+        quad9.tls_dns_name = Some("dns.quad9.net".to_owned());
 
         let mut config = ResolverConfig::new();
         config.add_name_server(cloudflare);
         config.add_name_server(quad9);
 
-        let opts = ResolverOpts::default();
-
-        let resolver = TokioAsyncResolver::tokio(config, opts);
+        let resolver = TokioResolver::builder_with_config(
+            config,
+            TokioConnectionProvider::default(),
+        )
+        .build();
 
         Ok(Self { resolver })
     }

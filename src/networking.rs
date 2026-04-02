@@ -9,22 +9,31 @@
 //! | 2 | Enhanced | OHTTP | Relay IP only; relay sees neither query nor client IP |
 //! | 3 | Maximum | Tor | Nothing — full geographic anonymization |
 //!
-//! ## Crate dependencies
+//! ## Tier 3 design
 //!
-//! - **Tier 1**: `hickory-resolver` with `dns-over-https-rustls`
-//! - **Tier 2**: placeholder (no mature OHTTP crate yet)
-//! - **Tier 3**: `arti-client` embedded Tor
+//! Tor connectivity uses a SOCKS5 proxy (via `tokio-socks`) that connects
+//! through an external Tor daemon. This is the same architecture used by
+//! Signal, Tor Browser, and other production privacy applications — the Tor
+//! process runs as a separate daemon, and the SDK connects through its
+//! SOCKS5 port (default `127.0.0.1:9050`).
+//!
+//! This approach avoids embedding the Arti Tor client (which pulls in
+//! ~1,400 transitive crates including unmaintained packages), keeping the
+//! supply chain auditable and free of security advisories.
 
 use std::collections::HashSet;
 use std::fmt;
 use std::net::IpAddr;
 
-use arti_client::{DataStream, TorClient as ArtiTorClient, TorClientConfig};
 use hickory_resolver::config::{NameServerConfig, ResolverConfig};
+use hickory_resolver::name_server::TokioConnectionProvider;
 use hickory_resolver::proto::xfer::Protocol;
 use hickory_resolver::TokioResolver;
-use hickory_resolver::name_server::TokioConnectionProvider;
-use tor_rtcompat::PreferredRuntime;
+use tokio::net::TcpStream;
+use tokio_socks::tcp::Socks5Stream;
+
+/// Default Tor SOCKS5 proxy address (standard Tor daemon port).
+const DEFAULT_TOR_SOCKS_ADDR: &str = "127.0.0.1:9050";
 
 /// Errors arising from privacy-networking operations.
 ///
@@ -36,8 +45,8 @@ pub enum NetworkError {
     DnsResolution(String),
     /// A TCP/TLS connection could not be established.
     Connection(String),
-    /// The embedded Tor client failed to bootstrap.
-    TorBootstrap(String),
+    /// The Tor SOCKS5 proxy is unreachable or rejected the connection.
+    TorProxy(String),
     /// The caller supplied an invalid or unsupported configuration.
     InvalidConfiguration(String),
 }
@@ -47,7 +56,7 @@ impl fmt::Display for NetworkError {
         match self {
             Self::DnsResolution(msg) => write!(f, "DNS resolution failed: {msg}"),
             Self::Connection(msg) => write!(f, "connection failed: {msg}"),
-            Self::TorBootstrap(msg) => write!(f, "Tor bootstrap failed: {msg}"),
+            Self::TorProxy(msg) => write!(f, "Tor proxy error: {msg}"),
             Self::InvalidConfiguration(msg) => {
                 write!(f, "invalid configuration: {msg}")
             }
@@ -68,7 +77,7 @@ pub enum PrivacyTier {
     /// Tier 2 — Oblivious HTTP.
     /// The relay cannot correlate the client IP with the request content.
     Enhanced,
-    /// Tier 3 — Tor via embedded Arti.
+    /// Tier 3 — Tor via external SOCKS5 proxy.
     /// Full geographic anonymization through onion-routed circuits.
     Maximum,
 }
@@ -149,20 +158,13 @@ impl PrivacyDns {
 /// 2. **Gateway** — decrypts the capsule and forwards the inner HTTP
 ///    request to the target, but never learns the client IP.
 ///
-/// Together they ensure that no single entity can correlate the client
-/// identity with the request payload. This is strictly stronger than
-/// standard `DoH` but does not provide geographic anonymization (unlike
-/// Tor).
-///
 /// # Status
 ///
 /// No production-quality OHTTP crate exists in the Rust ecosystem yet.
 /// This struct is a forward-looking placeholder; calling its methods will
 /// return [`NetworkError::InvalidConfiguration`].
 #[derive(Debug)]
-pub struct ObliviousRelay {
-    // TODO: OHTTP implementation
-}
+pub struct ObliviousRelay {}
 
 impl ObliviousRelay {
     /// Send `body` to `target_url` through the OHTTP relay/gateway pair.
@@ -182,59 +184,63 @@ impl ObliviousRelay {
     }
 }
 
-/// Type alias for the concrete Arti Tor client with the preferred runtime.
-type ArtiTorClientConcrete = ArtiTorClient<PreferredRuntime>;
-
-/// An embedded Tor client providing full onion-routed anonymity (**Tier 3**).
+/// A Tor SOCKS5 proxy client providing full onion-routed anonymity (**Tier 3**).
 ///
-/// Wraps [`arti_client::TorClient`] so that callers can open anonymous
-/// TCP streams without running a separate Tor daemon.
-#[derive(Clone)]
+/// Connects through an external Tor daemon's SOCKS5 port (default
+/// `127.0.0.1:9050`). This is the standard production architecture used by
+/// Signal, Tor Browser, and other privacy applications.
+///
+/// # Prerequisites
+///
+/// The Tor daemon must be running on the same machine. Install via:
+/// - macOS: `brew install tor && brew services start tor`
+/// - Linux: `apt install tor` / `systemctl start tor`
+/// - Windows: Install the Tor Expert Bundle
+#[derive(Debug, Clone)]
 pub struct TorClient {
-    inner: ArtiTorClientConcrete,
-}
-
-impl fmt::Debug for TorClient {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TorClient").finish_non_exhaustive()
-    }
+    socks_addr: String,
 }
 
 impl TorClient {
-    /// Bootstrap an embedded Tor client.
-    ///
-    /// This downloads the Tor consensus, builds circuits, and prepares the
-    /// client for anonymous connections. It may take several seconds on the
-    /// first invocation (subsequent calls reuse cached state).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`NetworkError::TorBootstrap`] if consensus download or
-    /// circuit construction fails.
-    pub async fn bootstrap() -> Result<Self, NetworkError> {
-        let config = TorClientConfig::default();
-        let client: ArtiTorClientConcrete =
-            ArtiTorClientConcrete::create_bootstrapped(config)
-                .await
-                .map_err(|e| NetworkError::TorBootstrap(e.to_string()))?;
-        Ok(Self { inner: client })
+    /// Create a Tor client pointing at the default SOCKS5 proxy
+    /// (`127.0.0.1:9050`).
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            socks_addr: DEFAULT_TOR_SOCKS_ADDR.to_owned(),
+        }
     }
 
-    /// Open an anonymized TCP stream to `target` (e.g. `"example.com:443"`).
+    /// Create a Tor client pointing at a custom SOCKS5 proxy address.
+    #[must_use]
+    pub fn with_socks_addr(addr: &str) -> Self {
+        Self {
+            socks_addr: addr.to_owned(),
+        }
+    }
+
+    /// Open an anonymized TCP stream to `target` (e.g. `"example.com:443"`)
+    /// through the Tor SOCKS5 proxy.
     ///
-    /// The returned [`DataStream`] implements both [`tokio::io::AsyncRead`]
-    /// and [`tokio::io::AsyncWrite`], so it can be used with TLS wrappers
-    /// and HTTP libraries as a drop-in transport.
+    /// The returned [`TcpStream`] can be used with TLS wrappers and HTTP
+    /// libraries as a drop-in transport.
     ///
     /// # Errors
     ///
-    /// Returns [`NetworkError::Connection`] if the Tor circuit cannot
-    /// reach the target.
-    pub async fn connect(&self, target: &str) -> Result<DataStream, NetworkError> {
-        self.inner
-            .connect(target)
+    /// Returns [`NetworkError::TorProxy`] if the SOCKS5 proxy is unreachable,
+    /// rejects the connection, or cannot route to the target.
+    pub async fn connect(&self, target: &str) -> Result<TcpStream, NetworkError> {
+        let stream = Socks5Stream::connect(&*self.socks_addr, target)
             .await
-            .map_err(|e| NetworkError::Connection(e.to_string()))
+            .map_err(|e| NetworkError::TorProxy(e.to_string()))?;
+
+        Ok(stream.into_inner())
+    }
+}
+
+impl Default for TorClient {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -276,8 +282,6 @@ impl CertificatePinner {
 mod tests {
     use super::*;
 
-    // -- PrivacyTier --------------------------------------------------------
-
     #[test]
     fn privacy_tier_values_are_distinct() {
         assert_ne!(PrivacyTier::Standard, PrivacyTier::Enhanced);
@@ -294,12 +298,9 @@ mod tests {
 
     #[test]
     fn privacy_tier_debug_format() {
-        // Ensure Debug is implemented and produces non-empty output.
         let dbg = format!("{:?}", PrivacyTier::Standard);
         assert!(!dbg.is_empty());
     }
-
-    // -- CertificatePinner --------------------------------------------------
 
     #[test]
     fn certificate_pinner_matches_known_pin() {
@@ -322,8 +323,6 @@ mod tests {
         assert!(!pinner.verify(&[0x00u8; 32]));
     }
 
-    // -- NetworkError -------------------------------------------------------
-
     #[test]
     fn network_error_display() {
         let err = NetworkError::DnsResolution("timeout".into());
@@ -332,8 +331,8 @@ mod tests {
         let err = NetworkError::Connection("refused".into());
         assert!(err.to_string().contains("refused"));
 
-        let err = NetworkError::TorBootstrap("no consensus".into());
-        assert!(err.to_string().contains("no consensus"));
+        let err = NetworkError::TorProxy("no proxy".into());
+        assert!(err.to_string().contains("no proxy"));
 
         let err = NetworkError::InvalidConfiguration("bad".into());
         assert!(err.to_string().contains("bad"));
@@ -343,11 +342,8 @@ mod tests {
     fn network_error_is_std_error() {
         let err: Box<dyn std::error::Error> =
             Box::new(NetworkError::Connection("test".into()));
-        // If this compiles, NetworkError implements std::error::Error.
         let _ = err.to_string();
     }
-
-    // -- ObliviousRelay (placeholder) ---------------------------------------
 
     #[test]
     fn oblivious_relay_returns_not_implemented() {
@@ -359,7 +355,17 @@ mod tests {
         assert!(msg.contains("OHTTP not yet implemented"));
     }
 
-    // -- PrivacyDns (requires network) --------------------------------------
+    #[test]
+    fn tor_client_default_socks_addr() {
+        let client = TorClient::new();
+        assert_eq!(client.socks_addr, DEFAULT_TOR_SOCKS_ADDR);
+    }
+
+    #[test]
+    fn tor_client_custom_socks_addr() {
+        let client = TorClient::with_socks_addr("127.0.0.1:9150");
+        assert_eq!(client.socks_addr, "127.0.0.1:9150");
+    }
 
     #[tokio::test]
     #[ignore = "requires network access"]
@@ -372,17 +378,13 @@ mod tests {
         assert!(!addrs.is_empty(), "expected at least one IP address");
     }
 
-    // -- TorClient (requires network + time) --------------------------------
-
     #[tokio::test]
-    #[ignore = "requires network access and Tor bootstrap time"]
+    #[ignore = "requires running Tor daemon on 127.0.0.1:9050"]
     async fn tor_client_can_connect() {
-        let client = TorClient::bootstrap()
-            .await
-            .expect("Tor bootstrap failed");
+        let client = TorClient::new();
         let _stream = client
             .connect("example.com:80")
             .await
-            .expect("Tor connection failed");
+            .expect("Tor SOCKS5 connection failed");
     }
 }

@@ -44,8 +44,7 @@ tokio = { version = "1", features = ["rt", "net", "io-util", "sync", "time", "ma
 hickory-resolver = { version = "0.25", features = ["https-ring"] }
 tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
-arti-client = { version = "0.41", default-features = false, features = ["tokio", "native-tls"] }
-tor-rtcompat = { version = "0.41", features = ["tokio", "native-tls"] }
+tokio-socks = "0.5"
 
 # --- Serialization ---
 serde = { version = "1", features = ["derive"] }

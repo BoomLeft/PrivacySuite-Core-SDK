@@ -21,6 +21,7 @@ use std::fmt;
 use automerge::sync::{Message, SyncDoc};
 use automerge::transaction::Transactable;
 use automerge::{AutoCommit, ReadDoc};
+use zeroize::Zeroize;
 
 use crate::crypto::aead::{decrypt, encrypt};
 use crate::crypto::keys::VaultKey;
@@ -158,8 +159,11 @@ impl EncryptedDocument {
     ///
     /// Returns [`CrdtError::Encryption`] if AEAD encryption fails.
     pub fn save_encrypted(&mut self, key: &VaultKey) -> Result<Vec<u8>, CrdtError> {
-        let plaintext = self.doc.save();
-        encrypt(key, &plaintext, CRDT_AAD).map_err(|_| CrdtError::Encryption)
+        // PEN-07: Zeroize the plaintext serialization after encryption.
+        let mut plaintext = self.doc.save();
+        let result = encrypt(key, &plaintext, CRDT_AAD).map_err(|_| CrdtError::Encryption);
+        plaintext.zeroize();
+        result
     }
 
     /// Decrypts and loads a document from bytes produced by
@@ -173,10 +177,12 @@ impl EncryptedDocument {
     /// Returns [`CrdtError::Automerge`] if the decrypted bytes are not a
     /// valid Automerge document.
     pub fn load_encrypted(data: &[u8], key: &VaultKey) -> Result<Self, CrdtError> {
-        let plaintext = decrypt(key, data, CRDT_AAD).map_err(|_| CrdtError::Decryption)?;
-        let doc =
-            AutoCommit::load(&plaintext).map_err(|e| CrdtError::Automerge(e.to_string()))?;
-        Ok(Self { doc })
+        let mut plaintext = decrypt(key, data, CRDT_AAD).map_err(|_| CrdtError::Decryption)?;
+        let result =
+            AutoCommit::load(&plaintext).map_err(|e| CrdtError::Automerge(e.to_string()));
+        // PEN-07: Zeroize decrypted plaintext after loading into Automerge.
+        plaintext.zeroize();
+        Ok(Self { doc: result? })
     }
 
     // -- Sync ---------------------------------------------------------------

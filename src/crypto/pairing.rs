@@ -127,23 +127,23 @@ pub fn compute_shared_secret(
 ///
 /// # Errors
 ///
-/// This function is infallible.
-#[must_use]
-pub fn derive_pairing_key(shared: &SharedSecret, context: &[u8]) -> VaultKey {
-    let mut deriver = blake3::Hasher::new_derive_key(
-        // BLAKE3 derive_key expects a UTF-8 context string; we convert
-        // the caller-supplied bytes to a &str. If the context is not valid
-        // UTF-8 we fall back to a fixed string. In practice callers should
-        // always pass valid UTF-8.
-        //
-        // NOTE: we use a helper to avoid panicking.
-        core::str::from_utf8(context).unwrap_or("PrivacySuite pairing fallback context"),
-    );
+/// Returns [`CryptoError::InvalidLength`] if `context` is not valid UTF-8.
+/// BLAKE3 key derivation requires a UTF-8 context string.
+pub fn derive_pairing_key(shared: &SharedSecret, context: &[u8]) -> Result<VaultKey, CryptoError> {
+    // PEN-05: Reject invalid UTF-8 instead of silently falling back to a
+    // fixed string. A silent fallback could cause two different callers to
+    // derive the same key from different (both invalid) contexts.
+    let context_str = core::str::from_utf8(context).map_err(|_| CryptoError::InvalidLength {
+        context: "BLAKE3 context (must be UTF-8)",
+        expected: 0, // N/A for encoding errors
+        actual: 0,
+    })?;
+    let mut deriver = blake3::Hasher::new_derive_key(context_str);
     let _ = deriver.update(shared.as_bytes());
     let hash = deriver.finalize();
     let mut key_bytes = [0u8; KEY_LEN];
     key_bytes.copy_from_slice(hash.as_bytes().get(..KEY_LEN).unwrap_or(&[0u8; KEY_LEN]));
-    VaultKey::from_bytes(key_bytes)
+    Ok(VaultKey::from_bytes(key_bytes))
 }
 
 // ---------------------------------------------------------------------------
@@ -303,8 +303,8 @@ mod tests {
         let shared2 = compute_shared_secret(&alice, bob.public_key());
 
         let ctx = b"test context v1";
-        let key1 = derive_pairing_key(&shared1, ctx);
-        let key2 = derive_pairing_key(&shared2, ctx);
+        let key1 = derive_pairing_key(&shared1, ctx).unwrap();
+        let key2 = derive_pairing_key(&shared2, ctx).unwrap();
 
         assert_eq!(key1.as_bytes(), key2.as_bytes());
     }
@@ -316,8 +316,8 @@ mod tests {
 
         let shared = compute_shared_secret(&alice, bob.public_key());
 
-        let k1 = derive_pairing_key(&shared, b"context A");
-        let k2 = derive_pairing_key(&shared, b"context B");
+        let k1 = derive_pairing_key(&shared, b"context A").unwrap();
+        let k2 = derive_pairing_key(&shared, b"context B").unwrap();
 
         assert_ne!(k1.as_bytes(), k2.as_bytes());
     }
@@ -327,8 +327,17 @@ mod tests {
         let alice = EphemeralKeypair::generate();
         let bob = EphemeralKeypair::generate();
         let shared = compute_shared_secret(&alice, bob.public_key());
-        let key = derive_pairing_key(&shared, b"len check");
+        let key = derive_pairing_key(&shared, b"len check").unwrap();
         assert_eq!(key.as_bytes().len(), KEY_LEN);
+    }
+
+    #[test]
+    fn derive_pairing_key_rejects_invalid_utf8() {
+        let alice = EphemeralKeypair::generate();
+        let bob = EphemeralKeypair::generate();
+        let shared = compute_shared_secret(&alice, bob.public_key());
+        let invalid_utf8 = &[0xFF, 0xFE, 0xFD];
+        assert!(derive_pairing_key(&shared, invalid_utf8).is_err());
     }
 
     // -- QR encode / decode --

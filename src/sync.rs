@@ -239,14 +239,12 @@ impl<T: SyncTransport + std::fmt::Debug> SyncTransport for EncryptedTransport<T>
     async fn recv(&mut self) -> Result<SyncMessage, SyncError> {
         let encrypted_msg = self.inner.recv().await?;
         let key = VaultKey::from_bytes(self.key_bytes);
-        let mut plaintext = aead::decrypt(&key, &encrypted_msg.payload, SYNC_AAD)
+        // PEN-03: Move plaintext directly into the message — no clone.
+        // The caller is responsible for zeroizing the payload when done.
+        let plaintext = aead::decrypt(&key, &encrypted_msg.payload, SYNC_AAD)
             .map_err(|_| SyncError::Decryption)?;
 
-        let msg = SyncMessage {
-            payload: plaintext.clone(),
-        };
-        plaintext.zeroize();
-        Ok(msg)
+        Ok(SyncMessage { payload: plaintext })
     }
 
     async fn close(&mut self) -> Result<(), SyncError> {

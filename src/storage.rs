@@ -17,7 +17,7 @@ use std::path::Path;
 use rusqlite::Connection;
 use zeroize::Zeroize;
 
-use crate::crypto::keys::{VaultKey, KEY_LEN};
+use crate::crypto::keys::VaultKey;
 use crate::error::CryptoError;
 
 // ---------------------------------------------------------------------------
@@ -82,28 +82,23 @@ impl fmt::Debug for EncryptedDb {
     }
 }
 
-/// Encode raw key bytes as the hex string `SQLCipher` expects after
-/// `PRAGMA key`, prefixed with `x'` and suffixed with `'`.
-fn hex_key(key: &VaultKey) -> String {
-    let bytes = key.as_bytes();
-    let mut hex = String::with_capacity(2 + KEY_LEN * 2 + 1);
-    hex.push_str("x'");
-    for b in bytes {
-        let _ = write!(hex, "{b:02x}");
-    }
-    hex.push('\'');
-    hex
-}
-
 /// Apply the encryption key and hardened pragmas to a freshly opened
 /// connection.
 fn apply_key(conn: &Connection, key: &VaultKey) -> Result<(), StorageError> {
-    let mut hex = hex_key(key);
+    // PEN-01/PEN-08: Build the PRAGMA statement in a single zeroizable buffer.
+    // We avoid format!() which would create an intermediate String containing
+    // the key that we cannot zeroize.
+    let mut pragma = String::with_capacity(80);
+    pragma.push_str("PRAGMA key = \"x'");
+    for b in key.as_bytes() {
+        let _ = write!(pragma, "{b:02x}");
+    }
+    pragma.push_str("'\";");
 
-    conn.execute_batch(&format!("PRAGMA key = \"{hex}\";"))?;
+    conn.execute_batch(&pragma)?;
 
-    // Zeroize the hex key immediately — it is no longer needed.
-    hex.zeroize();
+    // Zeroize the PRAGMA string — it contains the full hex key.
+    pragma.zeroize();
 
     // Tell SQLCipher to zeroize its own internal memory allocations.
     conn.execute_batch("PRAGMA cipher_memory_security = ON;")?;
@@ -208,7 +203,7 @@ impl EncryptedDb {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::keys::VaultKey;
+    use crate::crypto::keys::{VaultKey, KEY_LEN};
 
     fn test_key() -> VaultKey {
         VaultKey::from_bytes([0xAA; KEY_LEN])

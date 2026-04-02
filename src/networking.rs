@@ -286,9 +286,17 @@ impl CertificatePinner {
     }
 
     /// Returns `true` if `cert_hash` matches one of the pinned certificates.
+    ///
+    /// PEN-09: Uses constant-time comparison against every pin to prevent
+    /// timing side-channels that could reveal which pins are configured.
     #[must_use]
     pub fn verify(&self, cert_hash: &[u8; 32]) -> bool {
-        self.pins.contains(cert_hash)
+        use subtle::ConstantTimeEq;
+        let mut found: u8 = 0;
+        for pin in &self.pins {
+            found |= pin.ct_eq(cert_hash).unwrap_u8();
+        }
+        found == 1
     }
 }
 

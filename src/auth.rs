@@ -140,9 +140,9 @@ pub struct ClientRegistrationState {
 
 impl fmt::Debug for ClientRegistrationState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ClientRegistrationState")
-            .field("inner", &self.inner)
-            .finish_non_exhaustive()
+        // PEN-04: Never print opaque-ke internal state — it contains
+        // protocol secrets (OPRF blinding factor, etc.).
+        f.write_str("ClientRegistrationState(***)")
     }
 }
 
@@ -159,9 +159,7 @@ pub struct ClientLoginState {
 
 impl fmt::Debug for ClientLoginState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ClientLoginState")
-            .field("inner", &self.inner)
-            .finish_non_exhaustive()
+        f.write_str("ClientLoginState(***)")
     }
 }
 

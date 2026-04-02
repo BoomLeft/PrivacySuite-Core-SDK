@@ -16,12 +16,17 @@ use std::fmt;
 ///
 /// Error variants are intentionally coarse-grained to avoid leaking
 /// information about internal cryptographic state.
-#[derive(Debug)]
+///
+/// SEC-06: `PartialEq` and `Eq` are derived so callers can match errors
+/// with `==` without resorting to `Display`-based string comparison
+/// (which could introduce timing side-channels on error messages).
+#[derive(Debug, PartialEq, Eq)]
 pub enum CryptoError {
     /// Argon2id key derivation failed.
     ///
-    /// This typically means the parameter configuration is invalid.
-    /// It should never occur with the SDK's hardcoded parameters.
+    /// This typically means the parameter configuration is invalid or
+    /// the passphrase was rejected (e.g., empty).
+    /// It should never occur with valid parameters and a non-empty passphrase.
     KeyDerivation,
 
     /// AEAD encryption failed.

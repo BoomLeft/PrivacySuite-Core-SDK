@@ -5,15 +5,12 @@
 //!
 //! # Argon2id Parameters
 //!
-//! The SDK uses the following Argon2id parameters, validated on ARM mobile
-//! hardware per the README specification:
-//!
-//! | Parameter | Value | Rationale |
-//! |-----------|-------|-----------|
-//! | Memory    | 64 MB | OWASP minimum for interactive login |
-//! | Time      | 3     | Balances security vs. mobile UX |
-//! | Parallelism | 4   | Matches typical mobile core count |
-//! | Output    | 32 B  | 256-bit key for XChaCha20-Poly1305 |
+//! | Parameter   | Value | Rationale                          |
+//! |-------------|-------|------------------------------------|
+//! | Memory      | 64 MB | OWASP minimum for interactive login |
+//! | Time        | 3     | Balances security vs. mobile UX    |
+//! | Parallelism | 4     | Matches typical mobile core count  |
+//! | Output      | 32 B  | 256-bit key for XChaCha20-Poly1305 |
 
 use std::fmt;
 
@@ -22,10 +19,6 @@ use rand::RngCore;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::error::CryptoError;
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
 
 /// Argon2id memory cost in KiB (64 MB = 65536 KiB).
 const ARGON2_M_COST_KIB: u32 = 64 * 1024;
@@ -39,24 +32,10 @@ const ARGON2_P_COST: u32 = 4;
 /// Derived key length in bytes (256 bits).
 pub const KEY_LEN: usize = 32;
 
-/// Salt length in bytes (256 bits — generous to eliminate birthday collisions).
+/// Salt length in bytes (256 bits).
 pub const SALT_LEN: usize = 32;
 
-/// Minimum passphrase length in bytes.
-///
-/// Prevents accidentally passing empty or trivially short passphrases
-/// to Argon2id. A single UTF-8 character is the bare minimum; real
-/// applications should enforce much stronger requirements at the UI layer.
-const MIN_PASSPHRASE_LEN: usize = 1;
-
-// ---------------------------------------------------------------------------
-// Key types
-// ---------------------------------------------------------------------------
-
 /// A 256-bit key derived from a user's passphrase via Argon2id.
-///
-/// This is the master encryption key for a user's vault. It is used to
-/// derive per-purpose subkeys or directly as the AEAD key.
 ///
 /// The inner bytes are zeroized when this value is dropped.
 #[derive(Zeroize, ZeroizeOnDrop)]
@@ -66,8 +45,6 @@ pub struct VaultKey {
 
 impl VaultKey {
     /// Returns a reference to the raw key bytes.
-    ///
-    /// Callers must not copy these bytes into unzeroized storage.
     #[inline]
     #[must_use]
     pub fn as_bytes(&self) -> &[u8; KEY_LEN] {
@@ -76,11 +53,8 @@ impl VaultKey {
 
     /// Creates a `VaultKey` from a 32-byte array.
     ///
-    /// # Security
-    ///
     /// The caller is responsible for ensuring the source bytes are
     /// cryptographically derived (e.g., from Argon2id or BIP39 seed).
-    /// The source array is consumed (moved), not copied.
     #[must_use]
     pub fn from_bytes(bytes: [u8; KEY_LEN]) -> Self {
         Self { bytes }
@@ -95,15 +69,9 @@ impl fmt::Debug for VaultKey {
 
 /// A 256-bit random salt for Argon2id key derivation.
 ///
-/// A unique salt must be generated for each vault. Reusing salts across
-/// vaults weakens the key derivation.
-///
-/// # Security
-///
-/// `Salt` intentionally does not implement `Clone` or `Copy` to prevent
-/// accidental duplication that would leave unzeroized copies in memory.
-/// Use [`Salt::as_bytes()`] and [`Salt::from_bytes()`] for explicit
-/// serialization when storing to disk.
+/// Does not implement `Clone` or `Copy` to prevent accidental duplication
+/// that would leave unzeroized copies in memory.
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct Salt {
     bytes: [u8; SALT_LEN],
 }
@@ -123,8 +91,6 @@ impl Salt {
     }
 
     /// Creates a `Salt` from an existing 32-byte array.
-    ///
-    /// Use this when loading a previously stored salt.
     #[must_use]
     pub fn from_bytes(bytes: [u8; SALT_LEN]) -> Self {
         Self { bytes }
@@ -134,8 +100,7 @@ impl Salt {
     ///
     /// # Errors
     ///
-    /// Returns [`CryptoError::InvalidLength`] if the slice is not exactly
-    /// [`SALT_LEN`] bytes.
+    /// Returns [`CryptoError::InvalidLength`] if the slice is not [`SALT_LEN`] bytes.
     pub fn from_slice(slice: &[u8]) -> Result<Self, CryptoError> {
         let bytes: [u8; SALT_LEN] =
             slice.try_into().map_err(|_| CryptoError::InvalidLength {
@@ -160,33 +125,14 @@ impl fmt::Debug for Salt {
     }
 }
 
-// SEC-04: Salt does NOT implement Clone/Copy. Explicit Drop zeroizes.
-impl Drop for Salt {
-    fn drop(&mut self) {
-        self.bytes.zeroize();
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Key derivation
-// ---------------------------------------------------------------------------
-
 /// Derives a [`VaultKey`] from a passphrase and salt using Argon2id.
 ///
-/// Parameters: m=64 MB, t=3, p=4 (hardcoded, not configurable — prevents
-/// downgrade attacks from misconfiguration).
-///
-/// # Arguments
-///
-/// * `passphrase` — The user's passphrase as raw bytes (UTF-8 encoded).
-///   Must be at least 1 byte (empty passphrases are rejected).
-/// * `salt` — A unique, random salt for this vault.
+/// Parameters: m=64 MB, t=3, p=4 (hardcoded — prevents downgrade attacks).
 ///
 /// # Errors
 ///
-/// Returns [`CryptoError::KeyDerivation`] if:
-/// - The passphrase is empty.
-/// - Argon2id fails internally (should not happen with valid parameters).
+/// Returns [`CryptoError::KeyDerivation`] if the passphrase is empty or
+/// Argon2id fails internally.
 ///
 /// # Example
 ///
@@ -198,10 +144,7 @@ impl Drop for Salt {
 /// assert_eq!(key.as_bytes().len(), 32);
 /// ```
 pub fn derive_key(passphrase: &[u8], salt: &Salt) -> Result<VaultKey, CryptoError> {
-    // SEC-08: Reject empty passphrases — they produce valid but trivially
-    // brute-forceable keys. The UI layer should enforce real password policy;
-    // this is a last-resort backstop.
-    if passphrase.len() < MIN_PASSPHRASE_LEN {
+    if passphrase.is_empty() {
         return Err(CryptoError::KeyDerivation);
     }
 
@@ -210,26 +153,16 @@ pub fn derive_key(passphrase: &[u8], salt: &Salt) -> Result<VaultKey, CryptoErro
 
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
-    // SEC-05: key_bytes is written directly into VaultKey. We zeroize the
-    // temporary buffer in case the compiler doesn't elide the move.
     let mut key_bytes = [0u8; KEY_LEN];
-    let result = argon2
+    if argon2
         .hash_password_into(passphrase, salt.as_bytes(), &mut key_bytes)
-        .map_err(|_| CryptoError::KeyDerivation);
-
-    if result.is_err() {
+        .is_err()
+    {
         key_bytes.zeroize();
         return Err(CryptoError::KeyDerivation);
     }
 
-    let key = VaultKey::from_bytes(key_bytes);
-
-    // Zeroize the stack copy. The compiler may optimize this away since
-    // key_bytes was moved, but we do it defensively. Zeroize of a moved
-    // value is a no-op at worst, and catches unoptimized debug builds.
-    // key_bytes is now [0; 32] after the move so this is safe.
-
-    Ok(key)
+    Ok(VaultKey::from_bytes(key_bytes))
 }
 
 #[cfg(test)]
@@ -247,7 +180,6 @@ mod tests {
     fn derive_key_deterministic() {
         let salt = Salt::from_bytes([42u8; SALT_LEN]);
         let key1 = derive_key(b"same passphrase", &salt).unwrap();
-        // Re-create salt since it doesn't implement Clone.
         let salt = Salt::from_bytes([42u8; SALT_LEN]);
         let key2 = derive_key(b"same passphrase", &salt).unwrap();
         assert_eq!(key1.as_bytes(), key2.as_bytes());
@@ -273,9 +205,7 @@ mod tests {
 
     #[test]
     fn salt_from_slice_rejects_wrong_length() {
-        let short = [0u8; 16];
-        let result = Salt::from_slice(&short);
-        assert!(result.is_err());
+        assert!(Salt::from_slice(&[0u8; 16]).is_err());
     }
 
     #[test]
@@ -301,24 +231,9 @@ mod tests {
         assert!(debug.contains("***"));
     }
 
-    // SEC-08: Empty passphrase rejection.
     #[test]
     fn empty_passphrase_rejected() {
         let salt = Salt::generate().unwrap();
-        let result = derive_key(b"", &salt);
-        assert!(result.is_err());
-    }
-
-    // SEC-04: Salt is not Clone — verify at the type level.
-    // (This is a compile-time guarantee; the test just documents intent.)
-    #[test]
-    fn salt_is_not_clone() {
-        // If Salt implemented Clone, this function would compile.
-        // We verify it doesn't by checking the type is !Clone at runtime.
-        fn assert_not_clone<T>() {
-            // This function's mere existence constrains nothing,
-            // but it documents that Salt should never be Clone.
-        }
-        assert_not_clone::<Salt>();
+        assert!(derive_key(b"", &salt).is_err());
     }
 }

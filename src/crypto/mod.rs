@@ -1,13 +1,10 @@
 //! Cryptographic primitives for `PrivacySuite`.
 //!
-//! This module provides the core building blocks that every `BoomLeft`
-//! application uses to keep user data private:
-//!
-//! - **[`keys`]** — Argon2id key derivation and key types with zeroization.
+//! - **[`keys`]** — Argon2id key derivation, zeroizing key and salt types.
 //! - **[`aead`]** — XChaCha20-Poly1305 authenticated encryption.
 //! - **[`mnemonic`]** — BIP39 24-word recovery phrase generation and recovery.
 //!
-//! # Quick Start
+//! # Example
 //!
 //! ```
 //! use privacysuite_core_sdk::crypto::{keys, aead, mnemonic};

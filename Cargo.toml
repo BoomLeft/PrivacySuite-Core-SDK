@@ -1,7 +1,3 @@
-[workspace]
-members = []
-resolver = "2"
-
 [package]
 name = "privacysuite-core-sdk"
 version = "0.1.0"
@@ -11,61 +7,47 @@ description = "Zero-knowledge cryptographic foundation for BoomLeft applications
 authors = ["BoomLeft LLC"]
 license = "Proprietary"
 repository = "https://github.com/mkfnch/PrivacySuite-Core-SDK"
-publish = false                       # Never publish to crates.io
-
-[lints.rust]
-unsafe_code = "forbid"                # No unsafe — all crypto via pure-Rust RustCrypto
-missing_docs = "warn"
-unused_results = "warn"
-elided_lifetimes_in_paths = "warn"
-
-[lints.clippy]
-# Security-critical lints — these catch code patterns that violate BoomLeft's
-# privacy-by-math guarantees.
-unwrap_used = "deny"                  # Force explicit error handling; panics leak stack traces
-expect_used = "deny"                  # Same rationale
-panic = "deny"                        # No panics in shipped code
-todo = "deny"                         # No incomplete code ships
-unimplemented = "deny"                # Same
-dbg_macro = "deny"                    # No debug output in production
-print_stdout = "deny"                 # No accidental stdout logging (telemetry-free)
-print_stderr = "deny"                 # No accidental stderr logging (telemetry-free)
-mem_forget = "deny"                   # Prevents skipping Drop/Zeroize on sensitive data
-large_stack_arrays = "warn"           # Catch accidental key-material stack spills
-indexing_slicing = "warn"             # Prefer .get() to avoid panics on out-of-bounds
-pedantic = { level = "warn", priority = -1 }
+publish = false
 
 [dependencies]
-# Key derivation — Argon2id (m=64MB, t=3, p=4) per README spec
 argon2 = { version = "0.5", default-features = false, features = ["std"] }
-
-# AEAD — XChaCha20-Poly1305 (192-bit nonce, no collision concern)
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["std"] }
-
-# Secure memory cleanup — all key material must zeroize on drop
 zeroize = { version = "1.7", features = ["derive"] }
-
-# Cryptographic RNG — OsRng backed
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
-
-# BIP39 checksum (SHA-256) and seed derivation (PBKDF2-HMAC-SHA512)
 sha2 = { version = "0.10", default-features = false, features = ["std"] }
 hmac = { version = "0.12", default-features = false }
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
-
-# Constant-time comparison for MAC verification
 subtle = { version = "2", default-features = false }
 
-# Error handling
-thiserror = "1"
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+missing_debug_implementations = "deny"
+unreachable_pub = "deny"
+unused_results = "deny"
+elided_lifetimes_in_paths = "warn"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+mem_forget = "deny"
+large_stack_arrays = "warn"
+indexing_slicing = "warn"
+pedantic = { level = "warn", priority = -1 }
 
 [profile.release]
 opt-level = 3
-lto = "fat"                           # Full LTO for smaller binary + harder reverse-engineering
-codegen-units = 1                     # Single codegen unit for maximum optimization
-strip = "symbols"                     # Strip symbols — no debug info leaks in release
-panic = "abort"                       # Abort on panic — no unwinding, smaller binary, no stack traces
-overflow-checks = true                # Keep overflow checks even in release (security)
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+overflow-checks = true
 
 [profile.dev]
 overflow-checks = true

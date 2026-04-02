@@ -122,9 +122,6 @@ pub fn compute_shared_secret(
 /// Returns [`CryptoError::InvalidLength`] if `context` is not valid UTF-8.
 /// BLAKE3 key derivation requires a UTF-8 context string.
 pub fn derive_pairing_key(shared: &SharedSecret, context: &[u8]) -> Result<VaultKey, CryptoError> {
-    // PEN-05: Reject invalid UTF-8 instead of silently falling back to a
-    // fixed string. A silent fallback could cause two different callers to
-    // derive the same key from different (both invalid) contexts.
     let context_str = core::str::from_utf8(context).map_err(|_| CryptoError::InvalidLength {
         context: "BLAKE3 context (must be UTF-8)",
         expected: 0, // N/A for encoding errors

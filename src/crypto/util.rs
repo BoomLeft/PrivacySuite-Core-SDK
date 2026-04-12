@@ -24,14 +24,20 @@ pub fn secure_random(len: usize) -> Result<Vec<u8>, CryptoError> {
 /// Constant-time comparison of two byte slices.
 ///
 /// Returns `true` if both slices have the same length and identical contents.
-/// Runs in time proportional to the shorter slice regardless of where the
+/// Runs in time proportional to the longer slice regardless of where the
 /// first difference occurs, preventing timing side-channels.
+///
+/// # Security Note
+///
+/// The length check itself is NOT constant-time (length is not secret),
+/// but once lengths match, byte-by-byte comparison is constant-time.
 #[must_use]
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     use subtle::ConstantTimeEq;
     if a.len() != b.len() {
         return false;
     }
+    // SECURITY: ct_eq runs in constant time for equal-length inputs.
     a.ct_eq(b).into()
 }
 

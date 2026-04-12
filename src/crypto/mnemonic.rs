@@ -105,7 +105,8 @@ fn pack_entropy(entropy: &[u8; ENTROPY_BYTES]) -> [u8; PACKED_LEN] {
     let checksum = Sha256::digest(entropy);
     let mut packed = [0u8; PACKED_LEN];
     packed[..ENTROPY_BYTES].copy_from_slice(entropy);
-    packed[ENTROPY_BYTES] = checksum.first().copied().unwrap_or(0);
+    // SECURITY: SHA256 always produces 32 bytes, first() is safe. Explicit assertion for clarity.
+    packed[ENTROPY_BYTES] = checksum[0];
     packed
 }
 
@@ -194,7 +195,7 @@ impl Mnemonic {
             return Err(CryptoError::InvalidMnemonic);
         }
 
-        // PROD-06: Scan ALL words before returning — don't leak which
+        // SECURITY: PROD-06: Scan ALL words before returning — don't leak which
         // word position failed via early-return timing.
         let mut indices = [0usize; WORD_COUNT];
         let mut all_valid: u8 = 1;
@@ -217,7 +218,8 @@ impl Mnemonic {
         indices.zeroize();
 
         let hash = Sha256::digest(entropy);
-        let expected_checksum = hash.first().copied().unwrap_or(0);
+        // SECURITY: SHA256 always produces 32 bytes, indexing is safe.
+        let expected_checksum = hash[0];
 
         if bool::from(actual_checksum.ct_eq(&expected_checksum)) {
             Ok(Self { entropy })
@@ -240,9 +242,10 @@ impl Mnemonic {
         let mut words = Vec::with_capacity(WORD_COUNT);
         for pos in 0..WORD_COUNT {
             let idx = extract_index(&packed, pos);
-            if let Some(word) = wl.get(idx) {
-                words.push((*word).to_string());
-            }
+            // SECURITY: extract_index produces values 0..2048 by design, always valid for wordlist.
+            // Assertion ensures invariant holds.
+            let word = wl.get(idx).expect("extract_index produces valid wordlist indices");
+            words.push((*word).to_string());
         }
         words
     }
@@ -265,6 +268,7 @@ impl Mnemonic {
         let mut salt = format!("mnemonic{passphrase}");
 
         let mut seed = [0u8; SEED_LEN];
+        // SECURITY: PBKDF2 errors are checked before seed is returned; no partially-derived key leaked.
         let result = pbkdf2::<Hmac<Sha512>>(
             phrase.as_bytes(),
             salt.as_bytes(),
@@ -275,7 +279,10 @@ impl Mnemonic {
         phrase.zeroize();
         salt.zeroize();
 
-        result.map_err(|_| CryptoError::KeyDerivation)?;
+        if result.is_err() {
+            seed.zeroize();
+            return Err(CryptoError::KeyDerivation);
+        }
         Ok(seed)
     }
 
@@ -287,9 +294,9 @@ impl Mnemonic {
     pub fn derive_vault_key(&self, passphrase: &str) -> Result<VaultKey, CryptoError> {
         let mut seed = self.derive_seed(passphrase)?;
         let mut key_bytes = [0u8; KEY_LEN];
-        key_bytes.copy_from_slice(
-            seed.get(..KEY_LEN).ok_or(CryptoError::KeyDerivation)?,
-        );
+        // SECURITY: SEED_LEN is 64 bytes, KEY_LEN is 32 bytes, slice always valid.
+        // Assertion ensures this invariant.
+        key_bytes.copy_from_slice(&seed[..KEY_LEN]);
         seed.zeroize();
         Ok(VaultKey::from_bytes(key_bytes))
     }

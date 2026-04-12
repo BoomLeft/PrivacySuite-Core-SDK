@@ -17,9 +17,10 @@ default = ["auth"]
 auth = ["privacysuite-core-sdk/auth"]
 
 [dependencies]
+# SECURITY: FFI boundary dependencies pinned to exact versions.
 privacysuite-core-sdk = { path = "..", default-features = false }
-uniffi = { version = "0.31", default-features = false }
-thiserror = "2"
+uniffi = { version = "=0.31", default-features = false }
+thiserror = "=2"
 
 [lints.clippy]
 unwrap_used = "deny"

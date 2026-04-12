@@ -131,7 +131,9 @@ pub fn derive_pairing_key(shared: &SharedSecret, context: &[u8]) -> Result<Vault
     let _ = deriver.update(shared.as_bytes());
     let hash = deriver.finalize();
     let mut key_bytes = [0u8; KEY_LEN];
-    key_bytes.copy_from_slice(hash.as_bytes().get(..KEY_LEN).unwrap_or(&[0u8; KEY_LEN]));
+    // SECURITY: Use slice assertion instead of unwrap_or to ensure all KEY_LEN bytes copied.
+    // BLAKE3 guarantees >= 32 bytes always, this is a defensive invariant check.
+    key_bytes.copy_from_slice(&hash.as_bytes()[..KEY_LEN]);
     Ok(VaultKey::from_bytes(key_bytes))
 }
 

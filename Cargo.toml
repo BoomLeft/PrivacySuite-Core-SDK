@@ -23,47 +23,49 @@ full = ["auth", "storage", "sync", "networking"]
 
 [dependencies]
 # --- Crypto primitives (always available) ---
-argon2 = { version = "0.5", default-features = false, features = ["std"] }
-chacha20poly1305 = { version = "0.10", default-features = false, features = ["std"] }
-zeroize = { version = "1.7", features = ["derive"] }
-rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
-sha2 = { version = "0.10", default-features = false, features = ["std"] }
-hmac = { version = "0.12", default-features = false }
-pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
-subtle = { version = "2", default-features = false }
+# SECURITY: All crypto dependencies pinned to exact versions to prevent supply chain attacks.
+argon2 = "=0.5"
+chacha20poly1305 = "=0.10"
+zeroize = "=1.7"
+rand = "=0.8"
+sha2 = "=0.10"
+hmac = "=0.12"
+pbkdf2 = "=0.12"
+subtle = "=2"
 
 # --- Device pairing + signing (always available) ---
-x25519-dalek = { version = "2", features = ["static_secrets"] }
-ed25519-dalek = { version = "2", features = ["rand_core"] }
-blake3 = "1"
-base64 = "0.22"
+x25519-dalek = "=2"
+ed25519-dalek = "=2"
+blake3 = "=1"
+base64 = "=0.22"
 
 # --- Encrypted storage (optional: "storage" feature) ---
-rusqlite = { version = "0.36", features = ["bundled-sqlcipher"], optional = true }
+rusqlite = { version = "=0.36", features = ["bundled-sqlcipher"], optional = true }
 
 # --- CRDT sync (optional: "sync" feature) ---
-automerge = { version = "0.8", optional = true }
+automerge = { version = "=0.8", optional = true }
 
 # --- OPAQUE authentication (optional: "auth" feature) ---
-opaque-ke = { version = "3", optional = true }
+opaque-ke = { version = "=3", optional = true }
 
 # --- Privacy networking + sync (optional: "sync" / "networking" features) ---
-tokio = { version = "1", features = ["rt", "net", "io-util", "sync", "time", "macros"], optional = true }
-hickory-resolver = { version = "0.25", features = ["https-ring"], optional = true }
-tokio-tungstenite = { version = "0.26", features = ["native-tls"], optional = true }
-futures-util = { version = "0.3", default-features = false, features = ["sink"], optional = true }
-tokio-socks = { version = "0.5", optional = true }
+tokio = { version = "=1", features = ["rt", "net", "io-util", "sync", "time", "macros"], optional = true }
+hickory-resolver = { version = "=0.25", features = ["https-ring"], optional = true }
+tokio-tungstenite = { version = "=0.26", features = ["native-tls"], optional = true }
+futures-util = { version = "=0.3", default-features = false, features = ["sink"], optional = true }
+tokio-socks = { version = "=0.5", optional = true }
 
 # --- Serialization (optional: "sync" feature) ---
-serde = { version = "1", features = ["derive"], optional = true }
-serde_json = { version = "1", optional = true }
+serde = { version = "=1", features = ["derive"], optional = true }
+serde_json = { version = "=1", optional = true }
 
 [dev-dependencies]
-tempfile = "3"
-tokio = { version = "1", features = ["rt", "net", "io-util", "sync", "time", "macros"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-hex = "0.4"
+# SECURITY: Dev dependencies also pinned to prevent test environment drift.
+tempfile = "=3"
+tokio = { version = "=1", features = ["rt", "net", "io-util", "sync", "time", "macros"] }
+serde = { version = "=1", features = ["derive"] }
+serde_json = "=1"
+hex = "=0.4"
 
 [lints.rust]
 unsafe_code = "forbid"

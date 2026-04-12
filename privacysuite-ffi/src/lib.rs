@@ -112,13 +112,16 @@ pub struct VaultKeyHandle {
 impl VaultKeyHandle {
     /// Create a VaultKeyHandle from raw bytes (32 bytes required).
     #[uniffi::constructor]
-    pub fn from_bytes(bytes: Vec<u8>) -> Arc<Self> {
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<Arc<Self>, PrivacySuiteError> {
+        // SECURITY: Validate input length at FFI boundary to prevent type confusion.
+        if bytes.len() != keys::KEY_LEN {
+            return Err(PrivacySuiteError::InvalidLength);
+        }
         let mut arr = [0u8; keys::KEY_LEN];
-        let len = bytes.len().min(keys::KEY_LEN);
-        arr[..len].copy_from_slice(&bytes[..len]);
-        Arc::new(Self {
+        arr.copy_from_slice(&bytes);
+        Ok(Arc::new(Self {
             inner: keys::VaultKey::from_bytes(arr),
-        })
+        }))
     }
 
     /// Export the raw key bytes. Caller must zeroize when done.
@@ -291,8 +294,13 @@ pub fn aead_decrypt(
 /// Computes a keyed BLAKE3 MAC of `data`, returning a 32-byte digest.
 ///
 /// The key must be exactly 32 bytes.
+///
+/// # Security
+///
+/// Returns `InvalidLength` error if key is not exactly 32 bytes (validated at FFI boundary).
 #[uniffi::export]
 pub fn blake3_keyed_hash(key: Vec<u8>, data: Vec<u8>) -> Result<Vec<u8>, PrivacySuiteError> {
+    // SECURITY: Strict length validation at FFI boundary prevents key material confusion.
     if key.len() != hash::BLAKE3_HASH_LEN {
         return Err(PrivacySuiteError::InvalidLength);
     }
@@ -318,12 +326,17 @@ pub fn blake3_keyed_verify(key: Vec<u8>, data: Vec<u8>, expected: Vec<u8>) -> Re
 ///
 /// Expands a pseudorandom key into `output_len` bytes bound to `info`.
 /// PRK must be at least 32 bytes. Max output: 8160 bytes.
+///
+/// # Security
+///
+/// Returns error if PRK < 32 bytes or output_len > 8160, preventing HKDF downgrade attacks.
 #[uniffi::export]
 pub fn hkdf_sha256_expand(
     prk: Vec<u8>,
     info: Vec<u8>,
     output_len: u32,
 ) -> Result<Vec<u8>, PrivacySuiteError> {
+    // SECURITY: hkdf_expand validates PRK length and output length per RFC 5869.
     Ok(hkdf::hkdf_expand(&prk, &info, output_len as usize)?)
 }
 

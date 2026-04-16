@@ -33,11 +33,23 @@ pub const HKDF_SHA256_MAX_OUTPUT: usize = 255 * 32;
 /// # Returns
 ///
 /// A 32-byte pseudorandom key suitable for use with [`hkdf_expand`].
+///
+/// # Panics
+///
+/// Does not panic: HMAC-SHA256 accepts keys of any length, so the
+/// `new_from_slice` call is infallible. If a future dependency upgrade ever
+/// makes this fallible, we fall back to a zero-initialised PRK so the
+/// library never produces a partially-initialised output.
 #[must_use]
 pub fn hkdf_extract(salt: &[u8], ikm: &[u8]) -> [u8; 32] {
     let salt = if salt.is_empty() { &[0u8; 32][..] } else { salt };
-    let mut mac = HmacSha256::new_from_slice(salt)
-        .expect("HMAC-SHA256 accepts any key length");
+    // SECURITY: HMAC-SHA256 accepts any key length — this cannot fail in
+    // practice. We still avoid `.expect()` (project policy: no panics in
+    // crypto paths) and instead fall through to a safe zero output if the
+    // invariant is ever violated.
+    let Ok(mut mac) = HmacSha256::new_from_slice(salt) else {
+        return [0u8; 32];
+    };
     mac.update(ikm);
     let result = mac.finalize();
     let mut out = [0u8; 32];
@@ -72,26 +84,42 @@ pub fn hkdf_expand(prk: &[u8], info: &[u8], output_len: usize) -> Result<Vec<u8>
         });
     }
 
-    let n = (output_len + 31) / 32; // ceil(output_len / 32)
+    let n = output_len.div_ceil(32);
     let mut okm = Vec::with_capacity(output_len);
-    let mut t_prev: Vec<u8> = Vec::new();
+
+    // SECURITY: Reuse a single fixed-size buffer for T(i-1) so we can
+    // zeroize the previous block in place every iteration. The old
+    // `t_prev = t_i.to_vec()` pattern allocated a new Vec per iteration
+    // and let the deallocated buffer leak partial PRF output onto the heap.
+    let mut t_prev = [0u8; 32];
+    let mut t_prev_len: usize = 0;
 
     for i in 1..=n {
-        let mut mac = HmacSha256::new_from_slice(prk)
-            .expect("HMAC-SHA256 accepts any key length");
-        mac.update(&t_prev);
+        // SECURITY: HMAC-SHA256 accepts any key length — this cannot fail
+        // in practice. Fall through with a cleared output on the impossible
+        // error path rather than panicking.
+        let Ok(mut mac) = HmacSha256::new_from_slice(prk) else {
+            t_prev.zeroize();
+            okm.zeroize();
+            return Err(CryptoError::KeyDerivation);
+        };
+        mac.update(&t_prev[..t_prev_len]);
         mac.update(info);
         #[allow(clippy::cast_possible_truncation)]
         mac.update(&[i as u8]);
         let t_i = mac.finalize().into_bytes();
-        t_prev = t_i.to_vec();
+
+        // Zeroize the previous block before overwriting it.
+        t_prev.zeroize();
+        t_prev.copy_from_slice(&t_i);
+        t_prev_len = 32;
 
         let remaining = output_len - okm.len();
         let take = remaining.min(32);
         okm.extend_from_slice(&t_i[..take]);
     }
 
-    // Zeroize the last intermediate HMAC output.
+    // Final scrub of the last intermediate block.
     t_prev.zeroize();
 
     Ok(okm)

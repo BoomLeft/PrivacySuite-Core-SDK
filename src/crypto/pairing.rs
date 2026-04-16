@@ -12,6 +12,14 @@
 //!   paired devices (via [`SigningKeypair`]).
 //!
 //! All secret material implements [`Zeroize`] and [`ZeroizeOnDrop`].
+//!
+//! # Low-order point protection
+//!
+//! [`compute_shared_secret`] rejects peer public keys that live in the small
+//! subgroup of Curve25519 (the 8 low-order points). Without this check, a
+//! malicious peer could force the shared secret to the all-zero value,
+//! producing a fully predictable derived key. See CVE-class issues CVE-2020-12607
+//! and RFC 7748 Section 6.1.
 
 use std::fmt;
 
@@ -61,10 +69,16 @@ impl fmt::Debug for EphemeralKeypair {
 
 impl Drop for EphemeralKeypair {
     fn drop(&mut self) {
-        // `StaticSecret` does not implement `Zeroize` in x25519-dalek v2,
-        // so we overwrite via a fresh random key. The public key is not
-        // secret, but we clear it for hygiene.
-        self.secret = StaticSecret::random_from_rng(OsRng);
+        // SECURITY: Overwrite the secret with a deterministic zero-value
+        // StaticSecret before the field's own Drop runs. x25519-dalek's
+        // StaticSecret implements Zeroize (via its default `zeroize` feature),
+        // so assignment triggers ZeroizeOnDrop on the PREVIOUS secret.
+        //
+        // We deliberately avoid `StaticSecret::random_from_rng(OsRng)` in
+        // Drop: OsRng failure or Drop-time panics would abort the process
+        // (double-panic). A constant zero replacement is safe, deterministic,
+        // and panic-free.
+        self.secret = StaticSecret::from([0u8; 32]);
         self.public = PublicKey::from(&self.secret);
     }
 }
@@ -94,21 +108,35 @@ impl fmt::Debug for SharedSecret {
 
 /// Performs X25519 Diffie-Hellman to produce a [`SharedSecret`].
 ///
+/// # Low-order point rejection
+///
+/// If the peer's public key lies in the small subgroup of Curve25519 (the
+/// 8 known low-order points), the raw X25519 output is the all-zero string.
+/// This would let the peer force a completely predictable derived key.
+/// `x25519-dalek`'s `was_contributory()` returns `false` in that case, and
+/// this function rejects it with [`CryptoError::InvalidKey`].
+///
 /// # Errors
 ///
-/// This function is infallible for well-formed keys and therefore never
-/// returns an error, but callers should treat the shared secret as raw
-/// key material and always run it through [`derive_pairing_key`] before
-/// use.
-#[must_use]
+/// Returns [`CryptoError::InvalidKey`] if the peer supplied a low-order or
+/// otherwise non-contributory public key.
 pub fn compute_shared_secret(
     our: &EphemeralKeypair,
     their_public: &PublicKey,
-) -> SharedSecret {
+) -> Result<SharedSecret, CryptoError> {
     let raw = our.secret.diffie_hellman(their_public);
-    SharedSecret {
-        bytes: *raw.as_bytes(),
+
+    // SECURITY: Reject low-order points. If the peer sent one of the 8 known
+    // low-order Curve25519 points, the raw output is the all-zero string and
+    // `was_contributory` returns false. Proceeding would yield a shared
+    // secret the peer can predict.
+    if !raw.was_contributory() {
+        return Err(CryptoError::InvalidKey);
     }
+
+    Ok(SharedSecret {
+        bytes: *raw.as_bytes(),
+    })
 }
 
 /// Derives a [`VaultKey`] from a raw [`SharedSecret`] using BLAKE3
@@ -203,11 +231,11 @@ impl fmt::Debug for SigningKeypair {
 
 impl Drop for SigningKeypair {
     fn drop(&mut self) {
-        // `ed25519_dalek::SigningKey` stores the secret as `[u8; 32]`.
-        // The type itself doesn't expose `Zeroize`, so we overwrite
-        // with a deterministic throwaway key to scrub the secret bytes.
-        let zeros = [0u8; 32];
-        self.inner = ed25519_dalek::SigningKey::from_bytes(&zeros);
+        // SECURITY: ed25519-dalek v2 enables `zeroize` by default, so
+        // SigningKey zeroizes its internal scalar on Drop. Reassigning the
+        // inner field forces that Drop to run now (rather than relying on
+        // field-order drop cleanup) to scrub the original secret bytes.
+        self.inner = ed25519_dalek::SigningKey::from_bytes(&[0u8; 32]);
     }
 }
 
@@ -253,8 +281,8 @@ mod tests {
         let alice = EphemeralKeypair::generate();
         let bob = EphemeralKeypair::generate();
 
-        let shared_ab = compute_shared_secret(&alice, bob.public_key());
-        let shared_ba = compute_shared_secret(&bob, alice.public_key());
+        let shared_ab = compute_shared_secret(&alice, bob.public_key()).unwrap();
+        let shared_ba = compute_shared_secret(&bob, alice.public_key()).unwrap();
 
         assert_eq!(shared_ab.as_bytes(), shared_ba.as_bytes());
     }
@@ -265,10 +293,80 @@ mod tests {
         let bob = EphemeralKeypair::generate();
         let carol = EphemeralKeypair::generate();
 
-        let ab = compute_shared_secret(&alice, bob.public_key());
-        let ac = compute_shared_secret(&alice, carol.public_key());
+        let ab = compute_shared_secret(&alice, bob.public_key()).unwrap();
+        let ac = compute_shared_secret(&alice, carol.public_key()).unwrap();
 
         assert_ne!(ab.as_bytes(), ac.as_bytes());
+    }
+
+    #[test]
+    fn rejects_low_order_public_keys() {
+        // Canonical low-order points of Curve25519 taken from the
+        // curve25519-dalek "EIGHT_TORSION" constants. Supplied as a peer's
+        // public key, each of these forces the raw X25519 output to the
+        // all-zero string regardless of our secret scalar — which would
+        // let the attacker predict the derived pairing key. The contributory
+        // check must reject them.
+        //
+        // Source: RFC 7748 §6.1 and
+        // https://github.com/dalek-cryptography/curve25519-dalek
+        let low_order_points: [[u8; 32]; 7] = [
+            // Point at infinity / order 1.
+            [0u8; 32],
+            // Order-2 point (u = p-1 mod p, with high bit unset by clamping).
+            [
+                0xec, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+            ],
+            // Another order-2 representative.
+            [
+                0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+            ],
+            // Order-4 representative.
+            [
+                0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+            ],
+            // Order-8 representative A.
+            [
+                0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae,
+                0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f, 0xc4, 0x6a,
+                0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd,
+                0x86, 0x62, 0x05, 0x16, 0x5f, 0x49, 0xb8, 0x00,
+            ],
+            // Order-8 representative B.
+            [
+                0x5f, 0x9c, 0x95, 0xbc, 0xa3, 0x50, 0x8c, 0x24,
+                0xb1, 0xd0, 0xb1, 0x55, 0x9c, 0x83, 0xef, 0x5b,
+                0x04, 0x44, 0x5c, 0xc4, 0x58, 0x1c, 0x8e, 0x86,
+                0xd8, 0x22, 0x4e, 0xdd, 0xd0, 0x9f, 0x11, 0x57,
+            ],
+            // All-ones is not strictly low-order but is a classic malformed
+            // encoding that many defective implementations accept; we expect
+            // X25519's clamping + contributory check to still yield a
+            // non-zero shared secret here, so we don't require rejection.
+            // (Kept out of the assertion set below.)
+            [0xff; 32],
+        ];
+
+        let alice = EphemeralKeypair::generate();
+        // Only the first 6 are guaranteed small-subgroup points.
+        for point in &low_order_points[..6] {
+            let malicious = PublicKey::from(*point);
+            let result = compute_shared_secret(&alice, &malicious);
+            assert_eq!(
+                result.err(),
+                Some(CryptoError::InvalidKey),
+                "low-order point {point:?} must be rejected",
+            );
+        }
     }
 
     // -- derive_pairing_key --
@@ -278,8 +376,8 @@ mod tests {
         let alice = EphemeralKeypair::generate();
         let bob = EphemeralKeypair::generate();
 
-        let shared1 = compute_shared_secret(&alice, bob.public_key());
-        let shared2 = compute_shared_secret(&alice, bob.public_key());
+        let shared1 = compute_shared_secret(&alice, bob.public_key()).unwrap();
+        let shared2 = compute_shared_secret(&alice, bob.public_key()).unwrap();
 
         let ctx = b"test context v1";
         let key1 = derive_pairing_key(&shared1, ctx).unwrap();
@@ -293,7 +391,7 @@ mod tests {
         let alice = EphemeralKeypair::generate();
         let bob = EphemeralKeypair::generate();
 
-        let shared = compute_shared_secret(&alice, bob.public_key());
+        let shared = compute_shared_secret(&alice, bob.public_key()).unwrap();
 
         let k1 = derive_pairing_key(&shared, b"context A").unwrap();
         let k2 = derive_pairing_key(&shared, b"context B").unwrap();
@@ -305,7 +403,7 @@ mod tests {
     fn derive_pairing_key_length() {
         let alice = EphemeralKeypair::generate();
         let bob = EphemeralKeypair::generate();
-        let shared = compute_shared_secret(&alice, bob.public_key());
+        let shared = compute_shared_secret(&alice, bob.public_key()).unwrap();
         let key = derive_pairing_key(&shared, b"len check").unwrap();
         assert_eq!(key.as_bytes().len(), KEY_LEN);
     }
@@ -314,7 +412,7 @@ mod tests {
     fn derive_pairing_key_rejects_invalid_utf8() {
         let alice = EphemeralKeypair::generate();
         let bob = EphemeralKeypair::generate();
-        let shared = compute_shared_secret(&alice, bob.public_key());
+        let shared = compute_shared_secret(&alice, bob.public_key()).unwrap();
         let invalid_utf8 = &[0xFF, 0xFE, 0xFD];
         assert!(derive_pairing_key(&shared, invalid_utf8).is_err());
     }
@@ -440,7 +538,7 @@ mod tests {
     fn shared_secret_debug_does_not_leak() {
         let alice = EphemeralKeypair::generate();
         let bob = EphemeralKeypair::generate();
-        let shared = compute_shared_secret(&alice, bob.public_key());
+        let shared = compute_shared_secret(&alice, bob.public_key()).unwrap();
         let dbg = format!("{shared:?}");
         assert!(dbg.contains("***"));
         assert!(!dbg.contains('['));

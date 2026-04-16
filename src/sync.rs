@@ -33,6 +33,17 @@ use crate::crypto::keys::VaultKey;
 /// Associated data bound to every sync encryption operation.
 const SYNC_AAD: &[u8] = b"privacysuite:sync:v1";
 
+/// SECURITY: Upper bound on a single inbound sync message, in bytes.
+///
+/// Without this cap, a malicious or compromised relay could send an arbitrarily
+/// large WebSocket frame and exhaust client memory. 16 MiB is far larger than
+/// any legitimate Automerge sync message in typical use.
+const MAX_SYNC_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+
+/// SECURITY: Upper bound on a single WebSocket frame. Set to the same value
+/// as the full-message cap because we don't fragment.
+const MAX_SYNC_FRAME_BYTES: usize = MAX_SYNC_MESSAGE_BYTES;
+
 /// Errors that can occur during sync operations.
 #[derive(Debug)]
 pub enum SyncError {
@@ -122,13 +133,30 @@ pub struct RelayTransport {
 impl RelayTransport {
     /// Connects to a WebSocket relay at the given URL.
     ///
+    /// # Security
+    ///
+    /// Applies strict frame and message size limits (see
+    /// [`MAX_SYNC_MESSAGE_BYTES`] / [`MAX_SYNC_FRAME_BYTES`]) so a malicious
+    /// relay cannot exhaust client memory by sending oversized frames.
+    ///
     /// # Errors
     ///
     /// Returns [`SyncError::Transport`] if the TCP or TLS handshake fails.
     pub async fn connect(url: &str) -> Result<Self, SyncError> {
-        let (ws, _response) = tokio_tungstenite::connect_async(url)
-            .await
-            .map_err(|e| SyncError::Transport(e.to_string()))?;
+        use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+
+        // SECURITY: Cap inbound message and frame size so a hostile relay
+        // cannot exhaust client memory. All other fields use the crate
+        // defaults to avoid coupling to internal layout that may shift
+        // between patch versions.
+        let mut config = WebSocketConfig::default();
+        config.max_message_size = Some(MAX_SYNC_MESSAGE_BYTES);
+        config.max_frame_size = Some(MAX_SYNC_FRAME_BYTES);
+
+        let (ws, _response) =
+            tokio_tungstenite::connect_async_with_config(url, Some(config), false)
+                .await
+                .map_err(|e| SyncError::Transport(e.to_string()))?;
         Ok(Self { ws })
     }
 }
@@ -147,10 +175,24 @@ impl SyncTransport for RelayTransport {
         loop {
             match self.ws.next().await {
                 Some(Ok(WsMessage::Binary(data))) => {
+                    // SECURITY: Defense-in-depth bound check. The tungstenite
+                    // config already caps inbound messages, but re-verify
+                    // here so any config regression cannot translate into an
+                    // unbounded allocation.
+                    if data.len() > MAX_SYNC_MESSAGE_BYTES {
+                        return Err(SyncError::Protocol(
+                            "inbound message exceeds size limit".into(),
+                        ));
+                    }
                     return serde_json::from_slice(&data)
                         .map_err(|e| SyncError::Protocol(e.to_string()));
                 }
                 Some(Ok(WsMessage::Text(text))) => {
+                    if text.len() > MAX_SYNC_MESSAGE_BYTES {
+                        return Err(SyncError::Protocol(
+                            "inbound message exceeds size limit".into(),
+                        ));
+                    }
                     return serde_json::from_str(&text)
                         .map_err(|e| SyncError::Protocol(e.to_string()));
                 }

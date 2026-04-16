@@ -38,6 +38,9 @@ pub enum CryptoError {
     Base64Decode,
     /// Ed25519 signature verification failed.
     SignatureInvalid,
+    /// A key or public value is cryptographically invalid (e.g., an X25519
+    /// low-order point that would yield a predictable shared secret).
+    InvalidKey,
 }
 
 impl fmt::Display for CryptoError {
@@ -53,6 +56,7 @@ impl fmt::Display for CryptoError {
             }
             Self::Base64Decode => f.write_str("base64 decoding failed"),
             Self::SignatureInvalid => f.write_str("signature verification failed"),
+            Self::InvalidKey => f.write_str("invalid cryptographic key"),
         }
     }
 }

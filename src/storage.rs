@@ -59,21 +59,51 @@ impl fmt::Debug for EncryptedDb {
 
 /// Apply the encryption key and hardened pragmas to a freshly opened
 /// connection.
+///
+/// # Security
+///
+/// - `cipher_memory_security = ON` is issued BEFORE `PRAGMA key`. Per
+///   SQLCipher documentation, memory security must be configured before the
+///   key is applied so that SQLCipher's internal zeroization covers the
+///   buffers allocated during keying, including the parsed key itself.
+/// - The PRAGMA-key string is pre-sized with sufficient capacity so the
+///   underlying `String` buffer is never reallocated mid-build. A
+///   reallocation would deallocate the partially-filled original buffer
+///   without zeroizing it, leaving partial hex key bytes on the heap.
+/// - After `execute_batch`, the PRAGMA string (which holds the hex key) is
+///   zeroized before being dropped.
 fn apply_key(conn: &Connection, key: &VaultKey) -> Result<(), StorageError> {
-    let mut pragma = String::with_capacity(80);
-    pragma.push_str("PRAGMA key = \"x'");
+    // SECURITY: Memory security MUST be enabled before keying so SQLCipher
+    // zeroizes buffers created during key processing.
+    conn.execute_batch("PRAGMA cipher_memory_security = ON;")?;
+
+    // SECURITY: Exact capacity prevents Vec growth — a reallocation would
+    // leak partial hex key bytes on the heap without zeroization.
+    //   "PRAGMA key = \"x'"     = 16 bytes
+    //   hex-encoded KEY_LEN key = KEY_LEN * 2 bytes
+    //   "'\";"                  = 3 bytes
+    const PRAGMA_PREFIX: &str = "PRAGMA key = \"x'";
+    const PRAGMA_SUFFIX: &str = "'\";";
+    let required_capacity =
+        PRAGMA_PREFIX.len() + (key.as_bytes().len() * 2) + PRAGMA_SUFFIX.len();
+
+    let mut pragma = String::with_capacity(required_capacity);
+    pragma.push_str(PRAGMA_PREFIX);
     for b in key.as_bytes() {
         let _ = write!(pragma, "{b:02x}");
     }
-    pragma.push_str("'\";");
+    pragma.push_str(PRAGMA_SUFFIX);
+    // Invariant: no reallocation occurred.
+    debug_assert_eq!(pragma.len(), required_capacity);
+    debug_assert_eq!(pragma.capacity(), required_capacity);
 
-    conn.execute_batch(&pragma)?;
+    let exec_result = conn.execute_batch(&pragma);
 
-    // Zeroize the PRAGMA string — it contains the full hex key.
+    // Zeroize the PRAGMA string regardless of success — it contains the full
+    // hex key and must be scrubbed even on error paths.
     pragma.zeroize();
 
-    // Tell SQLCipher to zeroize its own internal memory allocations.
-    conn.execute_batch("PRAGMA cipher_memory_security = ON;")?;
+    exec_result?;
 
     Ok(())
 }

@@ -59,6 +59,9 @@ pub enum PrivacySuiteError {
     /// Ed25519 signature verification failed.
     #[error("signature verification failed")]
     SignatureInvalid,
+    /// A key is cryptographically invalid (e.g., X25519 low-order point).
+    #[error("invalid cryptographic key")]
+    InvalidKey,
     /// OPAQUE protocol state machine error.
     #[error("OPAQUE protocol error")]
     AuthProtocol,
@@ -78,6 +81,7 @@ impl From<CryptoError> for PrivacySuiteError {
             CryptoError::InvalidLength { .. } => Self::InvalidLength,
             CryptoError::Base64Decode => Self::Base64Decode,
             CryptoError::SignatureInvalid => Self::SignatureInvalid,
+            CryptoError::InvalidKey => Self::InvalidKey,
         }
     }
 }

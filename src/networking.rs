@@ -180,10 +180,17 @@ impl OhttpConfig {
 
     /// Decode the Gateway's X25519 public key from base64.
     ///
+    /// # Security
+    ///
+    /// Rejects the 32-byte all-zero key outright — that value is a Curve25519
+    /// low-order point whose use would force the OHTTP handshake to a
+    /// completely predictable shared secret. Further low-order-point rejection
+    /// happens during the ECDH itself in [`crate::crypto::pairing`].
+    ///
     /// # Errors
     ///
-    /// Returns [`NetworkError::InvalidConfiguration`] if the key is not
-    /// valid base64 or not exactly 32 bytes.
+    /// Returns [`NetworkError::InvalidConfiguration`] if the key is not valid
+    /// base64, not exactly 32 bytes, or is the all-zero small-subgroup point.
     pub fn gateway_public_key(
         &self,
     ) -> Result<x25519_dalek::PublicKey, NetworkError> {
@@ -198,6 +205,16 @@ impl OhttpConfig {
         if bytes.len() != 32 {
             return Err(NetworkError::InvalidConfiguration(
                 format!("gateway public key must be 32 bytes, got {}", bytes.len())
+            ));
+        }
+
+        // SECURITY: Reject the all-zero point at config-parse time. This is
+        // the most common low-order point and a clear indicator of a
+        // misconfigured or malicious gateway config. ECDH performs full
+        // low-order-point rejection per call site.
+        if bytes.iter().all(|&b| b == 0) {
+            return Err(NetworkError::InvalidConfiguration(
+                "gateway public key must not be the zero point".to_string(),
             ));
         }
 

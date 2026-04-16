@@ -65,11 +65,35 @@ fn wordlist() -> Result<&'static [&'static str], CryptoError> {
     }
 }
 
+/// Maximum byte length of any BIP39 wordlist word.
+///
+/// The English BIP39 wordlist contains words 3–8 characters long. We iterate
+/// a fixed upper bound ≥ the longest legal word so that timing is independent
+/// of the specific input length the user typed.
+const MAX_WORD_BYTES: usize = 16;
+
 /// Finds the index of `word` in the wordlist in constant time.
 ///
-/// Always scans the entire list to prevent timing side-channels.
+/// # Constant-time properties
+///
+/// - Always scans every candidate in `wl`.
+/// - Always compares [`MAX_WORD_BYTES`] bytes of `word` against each
+///   candidate, padding with zeros past the actual input length. This makes
+///   the per-candidate work independent of both the input word length and
+///   the candidate word length — preventing an attacker who can observe
+///   per-word timing from inferring which position in the BIP39 list the
+///   user's word lives at.
 fn word_to_index(word: &str, wl: &[&str]) -> Option<usize> {
     let word_bytes = word.as_bytes();
+
+    // Reject any input that exceeds the fixed comparison window. Longer
+    // inputs can never be a BIP39 word and the caller's code path is the
+    // same whether we return None now or after scanning — we still scan to
+    // preserve constant-time behaviour across valid-length inputs.
+    if word_bytes.len() > MAX_WORD_BYTES {
+        return None;
+    }
+
     let mut found_index: usize = 0;
     let mut found: u8 = 0;
 
@@ -77,9 +101,9 @@ fn word_to_index(word: &str, wl: &[&str]) -> Option<usize> {
         let candidate_bytes = candidate.as_bytes();
         let len_match = u8::from(word_bytes.len() == candidate_bytes.len());
 
-        let max_len = word_bytes.len().max(candidate_bytes.len());
+        // SECURITY: Fixed iteration count independent of input length.
         let mut bytes_match: u8 = 1;
-        for j in 0..max_len {
+        for j in 0..MAX_WORD_BYTES {
             let a = word_bytes.get(j).copied().unwrap_or(0);
             let b = candidate_bytes.get(j).copied().unwrap_or(0);
             bytes_match &= a.ct_eq(&b).unwrap_u8();
@@ -233,24 +257,42 @@ impl Mnemonic {
     /// Returns the 24 mnemonic words derived from the entropy.
     ///
     /// The caller should call `.zeroize()` on the returned vector when done.
+    ///
+    /// # Invariants
+    ///
+    /// A `Mnemonic` can only be constructed via [`Mnemonic::generate`] or
+    /// [`Mnemonic::from_phrase`]; both verify the wordlist before returning.
+    /// If that verification ever fails at runtime (e.g., the embedded wordlist
+    /// file is corrupt) this method returns an empty vector rather than
+    /// panicking, consistent with the SDK's "no panics in crypto paths"
+    /// policy.
     #[must_use]
     pub fn words(&self) -> Vec<String> {
         // wordlist() is cached after first call — no reallocation.
-        let wl = wordlist().unwrap_or_default();
+        let Ok(wl) = wordlist() else {
+            return Vec::new();
+        };
         let packed = pack_entropy(&self.entropy);
 
         let mut words = Vec::with_capacity(WORD_COUNT);
         for pos in 0..WORD_COUNT {
             let idx = extract_index(&packed, pos);
-            // SECURITY: extract_index produces values 0..2048 by design, always valid for wordlist.
-            // Assertion ensures invariant holds.
-            let word = wl.get(idx).expect("extract_index produces valid wordlist indices");
-            words.push((*word).to_string());
+            // SECURITY: extract_index produces values in 0..2^11 == 0..2048
+            // and the verified wordlist has exactly 2048 entries, so
+            // `wl.get(idx)` is always `Some`. We still avoid `.expect()` to
+            // uphold the no-panic policy in crypto paths.
+            match wl.get(idx) {
+                Some(word) => words.push((*word).to_string()),
+                None => return Vec::new(),
+            }
         }
         words
     }
 
     /// Returns the mnemonic as a space-separated string.
+    ///
+    /// Returns an empty string if the wordlist integrity check has failed
+    /// (see [`Mnemonic::words`] for the invariant).
     ///
     /// The caller should call `.zeroize()` on the returned string when done.
     #[must_use]

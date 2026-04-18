@@ -30,6 +30,19 @@ use crate::crypto::keys::VaultKey;
 /// ciphertext relocation across protocol contexts.
 const CRDT_AAD: &[u8] = b"privacysuite:crdt:v1";
 
+/// SECURITY: Upper bound on a single encrypted CRDT blob, in bytes.
+///
+/// A peer who already has the `VaultKey` (a trusted, paired device, or
+/// any peer that learned the key) could craft a multi-hundred-megabyte
+/// blob whose ciphertext decrypts cleanly but whose Automerge content
+/// is pathologically expensive to load (Automerge has historically
+/// mis-sized pre-allocations off malformed varints). Capping both the
+/// raw input and the decrypted plaintext at 16 MiB — the same bound
+/// used by `sync.rs` for WebSocket frames — keeps a malicious
+/// authenticated peer from mounting a memory-exhaustion DoS. 16 MiB is
+/// far larger than any legitimate BoomLeft Automerge document.
+pub const MAX_CRDT_BLOB_BYTES: usize = 16 * 1024 * 1024;
+
 /// Errors produced by CRDT document operations.
 #[derive(Debug)]
 pub enum CrdtError {
@@ -160,15 +173,43 @@ impl EncryptedDocument {
     /// Decrypts and loads a document from bytes produced by
     /// [`save_encrypted`](Self::save_encrypted).
     ///
+    /// # Safety caps
+    ///
+    /// Rejects inputs whose ciphertext exceeds
+    /// [`MAX_CRDT_BLOB_BYTES`] (currently 16 MiB) **before** decryption,
+    /// and again rejects the decrypted plaintext if it exceeds the
+    /// same bound. The pre-decrypt check is returned as
+    /// [`CrdtError::Decryption`] (not a dedicated "too large" variant)
+    /// to avoid giving an attacker a size-probe oracle that
+    /// distinguishes "blob was too big" from "blob had a bad tag".
+    ///
     /// # Errors
     ///
-    /// Returns [`CrdtError::Decryption`] if the key is wrong, the ciphertext
-    /// has been tampered with, or the AAD does not match.
+    /// Returns [`CrdtError::Decryption`] if the blob exceeds the size
+    /// cap, the key is wrong, the ciphertext has been tampered with,
+    /// or the AAD does not match.
     ///
     /// Returns [`CrdtError::Automerge`] if the decrypted bytes are not a
     /// valid Automerge document.
     pub fn load_encrypted(data: &[u8], key: &VaultKey) -> Result<Self, CrdtError> {
+        // SECURITY: Cap the ciphertext size *before* the AEAD call.
+        // Keeping the failure type `Decryption` (instead of a new
+        // `InputTooLarge`) means the attacker can't tell whether they
+        // hit the cap or the tag check failed.
+        if data.len() > MAX_CRDT_BLOB_BYTES {
+            return Err(CrdtError::Decryption);
+        }
+
         let mut plaintext = decrypt(key, data, CRDT_AAD).map_err(|_| CrdtError::Decryption)?;
+
+        // Defence in depth: if the plaintext itself somehow exceeds the
+        // cap (e.g. a future compression scheme inflates on decrypt),
+        // refuse to hand it to Automerge's loader.
+        if plaintext.len() > MAX_CRDT_BLOB_BYTES {
+            plaintext.zeroize();
+            return Err(CrdtError::Decryption);
+        }
+
         let result =
             AutoCommit::load(&plaintext).map_err(|e| CrdtError::Automerge(e.to_string()));
         plaintext.zeroize();
@@ -373,5 +414,46 @@ mod tests {
         // Must contain the struct name but must NOT contain the secret.
         assert!(debug.contains("EncryptedDocument"));
         assert!(!debug.contains("hunter2"));
+    }
+
+    // --- Finding #13: max blob size is enforced on load_encrypted ---
+
+    #[test]
+    fn load_encrypted_rejects_oversize_blob() {
+        let key = test_key();
+        let oversize = vec![0u8; MAX_CRDT_BLOB_BYTES + 1];
+        let err = EncryptedDocument::load_encrypted(&oversize, &key).unwrap_err();
+        // The error must be Decryption (not a new variant) so attackers
+        // cannot distinguish cap-hit from tag-failure.
+        assert!(matches!(err, CrdtError::Decryption));
+    }
+
+    #[test]
+    fn load_encrypted_rejects_exactly_cap_plus_one() {
+        let key = test_key();
+        // Exactly MAX + 1 must be rejected.
+        let oversize = vec![0u8; MAX_CRDT_BLOB_BYTES + 1];
+        assert!(matches!(
+            EncryptedDocument::load_encrypted(&oversize, &key),
+            Err(CrdtError::Decryption)
+        ));
+    }
+
+    #[test]
+    fn load_encrypted_accepts_legitimate_round_trip_below_cap() {
+        let key = test_key();
+        let mut doc = EncryptedDocument::new();
+        let _ = doc.put("k", "v");
+        let blob = doc.save_encrypted(&key).expect("save");
+        assert!(blob.len() < MAX_CRDT_BLOB_BYTES);
+        let _ = EncryptedDocument::load_encrypted(&blob, &key).expect("load");
+    }
+
+    // --- Finding #14: CrdtError is Send + Sync ---
+
+    #[test]
+    fn crdt_error_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<CrdtError>();
     }
 }

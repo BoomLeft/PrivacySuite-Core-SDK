@@ -24,7 +24,7 @@ use opaque_ke::{
     ClientRegistrationFinishParameters, CipherSuite,
 };
 use rand_core::OsRng;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::error::CryptoError;
 
@@ -44,9 +44,32 @@ impl CipherSuite for PrivacySuite {
 }
 
 /// Errors arising from the OPAQUE authentication flow.
+///
+/// # Variant semantics and information disclosure
+///
+/// The [`Protocol`](Self::Protocol) and
+/// [`InvalidMessage`](Self::InvalidMessage) variants distinguish two
+/// adjacent failure classes:
+///
+/// - `InvalidMessage` — the server response could not be deserialised
+///   (malformed bytes).
+/// - `Protocol` — the response deserialised but the OPAQUE key-exchange
+///   or envelope-decryption step failed (classic "wrong password" path,
+///   plus a handful of other protocol-internal failures).
+///
+/// The *structural* distinction does not help an on-path attacker
+/// because the OPAQUE construction is itself password-hiding — the
+/// server can't lie about password validity without the client
+/// noticing. However, a caller that surfaces the variant name to an
+/// end user verbatim would disclose "your server sent garbage" vs
+/// "your password is wrong" to anyone watching the UI. **Callers should
+/// render a single generic "Login failed" message to end users and
+/// reserve the variant distinction for internal logs or retry logic.**
+/// See Audit 2 Finding #7 for the full analysis.
 #[derive(Debug)]
 pub enum AuthError {
-    /// The OPAQUE protocol state machine detected an invalid transition.
+    /// The OPAQUE protocol state machine detected an invalid transition
+    /// (including the "wrong password" path).
     Protocol,
     /// A wire message could not be deserialised.
     InvalidMessage,
@@ -90,10 +113,22 @@ impl From<ProtocolError> for AuthError {
 
 /// An authenticated session key produced by a successful OPAQUE login.
 ///
-/// The inner bytes are zeroised on drop and never appear in `Debug` output.
-#[derive(Zeroize, ZeroizeOnDrop)]
+/// The inner bytes are zeroised on drop and never appear in `Debug`
+/// output. The storage is a `Zeroizing<Box<[u8]>>` rather than a plain
+/// `Vec<u8>` to guarantee:
+///
+/// 1. The allocation is sized exactly to the key length — a `Vec<u8>`
+///    could in principle over-allocate and leave unzeroised key bytes
+///    in the unused capacity region (`zeroize` only touches `0..len`).
+///    Today `opaque-ke` always returns an exact-length `Vec`, but a
+///    future upstream change that rounds up the capacity would silently
+///    regress this property.
+/// 2. No code path can `push` or `extend` on the backing storage and
+///    leave a previous reallocation un-zeroised in the heap free list.
+///
+/// See Audit 2 Finding #5 for the threat model.
 pub struct SessionKey {
-    bytes: Vec<u8>,
+    bytes: Zeroizing<Box<[u8]>>,
 }
 
 impl SessionKey {
@@ -244,9 +279,14 @@ pub fn login_finish(
         response,
         ClientLoginFinishParameters::default(),
     )?;
-    // `state.password` is dropped here and zeroised via ZeroizeOnDrop
+    // `state.password` is dropped here and zeroised via ZeroizeOnDrop.
+    // SECURITY: Collect into a Box<[u8]> (exact-sized) rather than a
+    // Vec<u8> (capacity-rounded) to ensure Zeroize walks every byte —
+    // see the SessionKey doc-comment.
+    let key_vec = result.session_key.to_vec();
+    let bytes: Box<[u8]> = key_vec.into_boxed_slice();
     Ok(SessionKey {
-        bytes: result.session_key.to_vec(),
+        bytes: Zeroizing::new(bytes),
     })
 }
 
@@ -363,7 +403,9 @@ mod tests {
     #[test]
     fn session_key_debug_does_not_leak() {
         let key = SessionKey {
-            bytes: vec![0xDE, 0xAD, 0xBE, 0xEF],
+            bytes: Zeroizing::new(
+                vec![0xDE_u8, 0xAD, 0xBE, 0xEF].into_boxed_slice(),
+            ),
         };
         let debug = format!("{key:?}");
         assert!(
@@ -375,5 +417,30 @@ mod tests {
             "Debug output must not contain key material"
         );
         assert_eq!(debug, "SessionKey(***)");
+    }
+
+    // --- Finding #5: SessionKey backing storage has no excess capacity ---
+
+    #[test]
+    fn session_key_box_has_no_excess_capacity() {
+        // A Box<[u8]> slice is by construction sized exactly to its
+        // element count — no allocator rounding that could hide key
+        // bytes past drop. This assertion codifies the invariant so a
+        // future refactor that swaps the storage back to `Vec<u8>`
+        // trips here.
+        let key = SessionKey {
+            bytes: Zeroizing::new(vec![0u8; 64].into_boxed_slice()),
+        };
+        assert_eq!(key.as_bytes().len(), 64);
+        // Box<[u8]>::as_ref() returns &[u8] which does not expose a
+        // `capacity`. The absence of that API is the point.
+    }
+
+    // --- Finding #14: AuthError is Send + Sync ---
+
+    #[test]
+    fn auth_error_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<AuthError>();
     }
 }

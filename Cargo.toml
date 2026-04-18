@@ -17,7 +17,7 @@ publish = false
 default = ["auth"]
 auth = ["dep:opaque-ke"]
 storage = ["dep:rusqlite"]
-sync = ["dep:automerge", "dep:tokio", "dep:tokio-tungstenite", "dep:futures-util", "dep:serde", "dep:serde_json"]
+sync = ["dep:automerge", "dep:tokio", "dep:tokio-tungstenite", "dep:native-tls", "dep:tokio-native-tls", "dep:futures-util", "dep:serde", "dep:serde_json"]
 networking = ["dep:hickory-resolver", "dep:tokio-socks", "dep:tokio"]
 # Oblivious HTTP (RFC 9458) client. Pure-Rust HPKE (DHKEM(X25519,
 # HKDF-SHA256) / HKDF-SHA256 / ChaCha20-Poly1305) built on the SDK's
@@ -76,6 +76,13 @@ opaque-ke = { version = "=3", optional = true }
 tokio = { version = "=1", features = ["rt", "net", "io-util", "sync", "time", "macros"], optional = true }
 hickory-resolver = { version = "=0.25", features = ["https-ring"], optional = true }
 tokio-tungstenite = { version = "=0.26", features = ["native-tls"], optional = true }
+# SECURITY: Direct dependencies on native-tls and tokio-native-tls are
+# required for the post-handshake TLS pin-check performed in
+# `sync::RelayTransport::connect_with_pinner` — see Audit 2 Finding #1.
+# Versions pinned to exactly what tokio-tungstenite's `native-tls`
+# feature already pulls in, so no new transitive versions are introduced.
+native-tls = { version = "=0.2.18", optional = true }
+tokio-native-tls = { version = "=0.3.1", optional = true }
 futures-util = { version = "=0.3", default-features = false, features = ["sink"], optional = true }
 tokio-socks = { version = "=0.5", optional = true }
 

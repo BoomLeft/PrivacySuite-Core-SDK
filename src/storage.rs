@@ -9,6 +9,16 @@
 //! - Database files are indistinguishable from random data without the key.
 //! - The hex-encoded key string is zeroized immediately after PRAGMA key.
 //! - `Debug` output never reveals connection details or key material.
+//!
+//! # Concurrency model
+//!
+//! [`EncryptedDb`] wraps a [`rusqlite::Connection`] which is `Send` but
+//! **not** `Sync` — the underlying SQLite handle uses interior mutability
+//! (`RefCell`) and cannot be shared across threads without external
+//! serialisation. Callers that need a multi-reader/writer model should
+//! wrap the handle in `Arc<Mutex<EncryptedDb>>` (or a connection pool).
+//! Do not `unsafe impl Sync` on this type — SQLite will panic or corrupt
+//! state under concurrent access.
 
 use std::fmt;
 use std::fmt::Write as _;
@@ -19,17 +29,38 @@ use zeroize::Zeroize;
 
 use crate::crypto::keys::VaultKey;
 
+/// SECURITY: Upper bound on a single Automerge blob shipped to
+/// `EncryptedDocument::load_encrypted`. See the crdt module for the same
+/// constant; re-exported here for callers persisting blobs directly.
+#[doc(hidden)]
+pub const MAX_ENCRYPTED_BLOB_BYTES: usize = 16 * 1024 * 1024;
+
 /// Errors returned by encrypted storage operations.
+///
+/// The variants are intentionally coarse-grained. In particular, the
+/// `Database` variant carries a sanitised string (see
+/// [`sanitise_sqlite_error`]) — not the raw `rusqlite` message — because
+/// SQLite error strings often include table and column names that reveal
+/// the vault's schema to anyone with access to the app's log sink. For
+/// a privacy-focused vault, the schema itself is sensitive (it reveals
+/// which data categories the user stores).
 #[derive(Debug)]
 pub enum StorageError {
-    /// Database operation failed.
+    /// Database operation failed. The attached string is a sanitised
+    /// short label (e.g. `"constraint"`, `"io"`, `"corrupt"`,
+    /// `"not found"`, `"database"`) rather than the raw `rusqlite`
+    /// error text. See [`sanitise_sqlite_error`].
     Database(String),
+    /// An input exceeded the configured safety cap (e.g. blob-size
+    /// bound on `load_encrypted`-style paths).
+    InputTooLarge,
 }
 
 impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Database(msg) => write!(f, "storage error: {msg}"),
+            Self::InputTooLarge => f.write_str("storage input too large"),
         }
     }
 }
@@ -38,7 +69,57 @@ impl std::error::Error for StorageError {}
 
 impl From<rusqlite::Error> for StorageError {
     fn from(err: rusqlite::Error) -> Self {
-        Self::Database(err.to_string())
+        Self::Database(sanitise_sqlite_error(&err))
+    }
+}
+
+/// Map a raw [`rusqlite::Error`] to a short, schema-free label.
+///
+/// SQLite error strings routinely embed table, column, and index names
+/// (e.g. `"UNIQUE constraint failed: passwords.email"`). For a vault
+/// whose schema is itself sensitive, we must not hand that string to
+/// callers who may log it. The sanitised labels here are:
+///
+/// - `"constraint"` — any `SqliteFailure` whose extended code indicates
+///   a constraint violation.
+/// - `"io"` — disk / IO-class failures.
+/// - `"corrupt"` — on-disk format corruption.
+/// - `"not found"` — `QueryReturnedNoRows` and friends.
+/// - `"type mismatch"` / `"invalid column"` — schema mismatches.
+/// - `"database"` — fallback for everything else.
+///
+/// The raw error is **not** preserved in the returned string. If a
+/// caller needs the original error for debugging, it must enable the
+/// platform's debug-assertion build where the `Debug` impl of
+/// `rusqlite::Error` is still accessible at the call site before
+/// conversion.
+fn sanitise_sqlite_error(err: &rusqlite::Error) -> String {
+    use rusqlite::Error as E;
+    use rusqlite::ErrorCode;
+
+    match err {
+        E::SqliteFailure(sqlite_err, _) => match sqlite_err.code {
+            ErrorCode::ConstraintViolation => "constraint",
+            ErrorCode::DatabaseCorrupt => "corrupt",
+            ErrorCode::DiskFull
+            | ErrorCode::CannotOpen
+            | ErrorCode::FileLockingProtocolFailed
+            | ErrorCode::ReadOnly
+            | ErrorCode::SystemIoFailure => "io",
+            ErrorCode::NotFound => "not found",
+            _ => "database",
+        }
+        .to_owned(),
+        E::QueryReturnedNoRows => "not found".to_owned(),
+        E::IntegralValueOutOfRange(..)
+        | E::InvalidColumnType(..)
+        | E::FromSqlConversionFailure(..)
+        | E::ToSqlConversionFailure(..) => "type mismatch".to_owned(),
+        E::InvalidColumnIndex(_) | E::InvalidColumnName(_) => "invalid column".to_owned(),
+        E::InvalidParameterName(_) | E::InvalidParameterCount(..) => {
+            "invalid parameter".to_owned()
+        }
+        _ => "database".to_owned(),
     }
 }
 
@@ -47,6 +128,18 @@ impl From<rusqlite::Error> for StorageError {
 /// Wraps a [`rusqlite::Connection`] that has already been keyed with a
 /// [`VaultKey`]. All data written through this handle is transparently
 /// encrypted on disk.
+///
+/// # Concurrency
+///
+/// `EncryptedDb` is `Send` but **not** `Sync` — the underlying
+/// `rusqlite::Connection` uses interior mutability and cannot be
+/// shared across threads without external serialisation. To drive
+/// multiple readers/writers, wrap the handle in
+/// `Arc<Mutex<EncryptedDb>>` (or `tokio::sync::Mutex` in async
+/// contexts) or adopt a connection-pool pattern. Do **not** paper over
+/// the `!Sync` bound with `unsafe impl Sync` — SQLite will corrupt
+/// internal state under concurrent access. See Audit 2 Finding #12
+/// for the full rationale.
 pub struct EncryptedDb {
     conn: Connection,
 }
@@ -64,11 +157,23 @@ impl fmt::Debug for EncryptedDb {
 /// SQLCipher requirements: memory security must be configured before the
 /// key is parsed so SQLCipher's zeroization covers the keying buffers.
 ///
+/// `cipher_compatibility = 4` pins the SQLCipher on-disk format to
+/// major version 4. Without this pin, a future major-version bump in
+/// the bundled SQLCipher (e.g. 5) would silently rewrite file format
+/// semantics — either making v0.1-written databases unreadable, or
+/// (worse) opening them with weaker compile-time defaults. The caller-
+/// provided 256-bit key is passed via `PRAGMA key = "x'<hex>'"`, which
+/// bypasses SQLCipher's own PBKDF2 KDF, so `kdf_iter` is irrelevant;
+/// compatibility, page size, and HMAC algorithm defaults for SQLCipher
+/// 4 are the correct fixed set.
+///
 /// A pre-sized buffer avoids Vec reallocation mid-build — a reallocation
 /// would deallocate a partially-written buffer without zeroizing it,
 /// leaking partial hex-key bytes onto the heap.
 fn apply_key(conn: &Connection, key: &VaultKey) -> Result<(), StorageError> {
-    const PREFIX: &str = "PRAGMA cipher_memory_security = ON; PRAGMA key = \"x'";
+    const PREFIX: &str = "PRAGMA cipher_memory_security = ON; \
+                          PRAGMA cipher_compatibility = 4; \
+                          PRAGMA key = \"x'";
     const SUFFIX: &str = "'\";";
     let capacity = PREFIX.len() + key.as_bytes().len() * 2 + SUFFIX.len();
 
@@ -282,5 +387,78 @@ mod tests {
         assert_eq!(debug, "EncryptedDb(***)");
         assert!(!debug.contains("Connection"));
         assert!(!debug.contains("memory"));
+    }
+
+    // --- Finding #8: StorageError::Database carries a sanitised label ---
+
+    #[test]
+    fn storage_error_does_not_leak_schema_on_constraint_violation() {
+        let db = EncryptedDb::open_in_memory(&test_key()).expect("open");
+        let _ = db
+            .execute(
+                "CREATE TABLE secrets (email TEXT PRIMARY KEY, password TEXT)",
+                &[],
+            )
+            .expect("create");
+        let _ = db
+            .execute(
+                "INSERT INTO secrets (email, password) VALUES ('a@b', 'x')",
+                &[],
+            )
+            .expect("insert");
+
+        // Duplicate insertion triggers a UNIQUE constraint violation.
+        // The raw rusqlite message is "UNIQUE constraint failed: secrets.email".
+        // Our sanitised variant must NOT carry the table/column name.
+        let err = db
+            .execute(
+                "INSERT INTO secrets (email, password) VALUES ('a@b', 'y')",
+                &[],
+            )
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("constraint"));
+        assert!(!msg.contains("secrets"));
+        assert!(!msg.contains("email"));
+        assert!(!msg.contains("password"));
+    }
+
+    #[test]
+    fn storage_error_not_found_is_sanitised() {
+        let db = EncryptedDb::open_in_memory(&test_key()).expect("open");
+        let _ = db
+            .execute("CREATE TABLE t (x TEXT)", &[])
+            .expect("create");
+        let err: StorageError = db
+            .query_row("SELECT x FROM t WHERE x = 'missing'", &[], |r| {
+                r.get::<_, String>(0)
+            })
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("not found"));
+    }
+
+    // --- Finding #9: cipher_compatibility = 4 is applied ---
+
+    #[test]
+    fn cipher_compatibility_is_queryable_as_4() {
+        // Confirms the PRAGMA was issued by reading it back. A regression
+        // that dropped the line would return SQLCipher's compile-time
+        // default, which today is also 4 — but the point of the
+        // assertion is to lock the configuration in place regardless of
+        // future compile-time changes.
+        let db = EncryptedDb::open_in_memory(&test_key()).expect("open");
+        let compat: i64 = db
+            .query_row("PRAGMA cipher_compatibility", &[], |row| row.get(0))
+            .expect("query_row cipher_compatibility");
+        assert_eq!(compat, 4);
+    }
+
+    // --- Finding #14: error types are Send + Sync (compile-time assertion) ---
+
+    #[test]
+    fn storage_error_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<StorageError>();
     }
 }

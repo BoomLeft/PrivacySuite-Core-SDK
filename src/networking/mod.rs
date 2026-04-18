@@ -22,7 +22,7 @@
 //! supply chain auditable and free of security advisories.
 
 use std::fmt;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use hickory_resolver::config::{NameServerConfig, ResolverConfig};
 use hickory_resolver::name_server::TokioConnectionProvider;
@@ -87,6 +87,20 @@ pub enum PrivacyTier {
 /// Upstream servers:
 /// - Cloudflare (`1.1.1.1`)
 /// - Quad9 (`9.9.9.9`)
+///
+/// # SSRF / private-IP filter
+///
+/// By default [`PrivacyDns::resolve`] strips addresses that are not
+/// publicly routable — RFC 1918 (10/8, 172.16/12, 192.168/16), loopback,
+/// link-local, CGNAT (100.64/10), IPv4 broadcast/multicast/documentation,
+/// cloud metadata (`169.254.169.254`), IPv4-mapped-IPv6, and the IPv6
+/// equivalents. A malicious DoH response (or a MITM on the DoH channel)
+/// cannot steer a caller that blindly dials the first returned IP into
+/// the user's `localhost`, internal LAN, or a cloud metadata endpoint.
+///
+/// Tests and local development that legitimately need to resolve
+/// private targets should call [`PrivacyDns::resolve_raw`] (behaviour-
+/// equivalent to the pre-filter version).
 #[derive(Debug)]
 pub struct PrivacyDns {
     resolver: TokioResolver,
@@ -129,13 +143,37 @@ impl PrivacyDns {
         Ok(Self { resolver })
     }
 
-    /// Resolve `domain` to a list of IP addresses via DNS-over-HTTPS.
+    /// Resolve `domain` to publicly-routable IP addresses via DNS-over-HTTPS.
+    ///
+    /// SSRF-guarded: private, loopback, link-local, CGNAT, broadcast,
+    /// multicast, documentation, and IPv4-mapped-IPv6 addresses are
+    /// filtered out of the returned list. Returns an empty `Vec` if
+    /// every answer is rejected (intentional: the caller should treat
+    /// that as a lookup failure rather than silently falling back).
+    ///
+    /// See [`PrivacyDns::resolve_raw`] if you need the unfiltered set
+    /// (e.g. for local development).
     ///
     /// # Errors
     ///
     /// Returns [`NetworkError::DnsResolution`] if the upstream `DoH` servers
     /// cannot resolve the domain.
     pub async fn resolve(&self, domain: &str) -> Result<Vec<IpAddr>, NetworkError> {
+        let all = self.resolve_raw(domain).await?;
+        Ok(all.into_iter().filter(|ip| is_public_unicast(ip)).collect())
+    }
+
+    /// Resolve `domain` without any SSRF / private-IP filtering.
+    ///
+    /// Use this only for local development, unit tests, or cases where
+    /// the caller is explicitly allowed to dial private destinations.
+    /// Production code must prefer [`PrivacyDns::resolve`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NetworkError::DnsResolution`] if the upstream `DoH`
+    /// servers cannot resolve the domain.
+    pub async fn resolve_raw(&self, domain: &str) -> Result<Vec<IpAddr>, NetworkError> {
         let response = self
             .resolver
             .lookup_ip(domain)
@@ -144,6 +182,93 @@ impl PrivacyDns {
 
         Ok(response.iter().collect())
     }
+}
+
+/// Returns `true` for IP addresses that are safe to return from a
+/// public-internet name lookup.
+///
+/// Rejects the full SSRF-class surface:
+/// - IPv4: RFC 1918 private (`10/8`, `172.16/12`, `192.168/16`),
+///   loopback (`127/8`), link-local (`169.254/16`, including the cloud
+///   metadata endpoint `169.254.169.254`), CGNAT (`100.64/10`),
+///   `0.0.0.0/8` (unspecified), broadcast (`255.255.255.255`),
+///   multicast (`224/4`), documentation ranges, and
+///   benchmark (`198.18/15`).
+/// - IPv6: loopback (`::1`), unspecified (`::`), unique-local
+///   (`fc00::/7`, which includes `fd00::/8`), link-local (`fe80::/10`),
+///   multicast (`ff00::/8`), documentation (`2001:db8::/32`), and
+///   IPv4-mapped addresses (`::ffff:0:0/96`) if they embed a
+///   non-public IPv4.
+fn is_public_unicast(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => is_public_v4(v4),
+        IpAddr::V6(v6) => is_public_v6(v6),
+    }
+}
+
+#[doc(hidden)]
+pub(crate) fn is_public_v4(v4: &Ipv4Addr) -> bool {
+    if v4.is_loopback()
+        || v4.is_private()
+        || v4.is_link_local()
+        || v4.is_broadcast()
+        || v4.is_multicast()
+        || v4.is_unspecified()
+        || v4.is_documentation()
+    {
+        return false;
+    }
+    let [a, b, _, _] = v4.octets();
+    // CGNAT 100.64.0.0/10 — not publicly routable though `is_private`
+    // returns false for it on Rust stable.
+    if a == 100 && (64..=127).contains(&b) {
+        return false;
+    }
+    // RFC 2544 benchmark 198.18.0.0/15.
+    if a == 198 && (b == 18 || b == 19) {
+        return false;
+    }
+    // 0.0.0.0/8 is source-only per RFC 1122 §3.2.1.3.
+    if a == 0 {
+        return false;
+    }
+    // Explicit cloud-metadata endpoints (link-local already caught these,
+    // listed here for readability / defense-in-depth).
+    if v4.octets() == [169, 254, 169, 254] {
+        return false;
+    }
+    true
+}
+
+#[doc(hidden)]
+pub(crate) fn is_public_v6(v6: &Ipv6Addr) -> bool {
+    if v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() {
+        return false;
+    }
+    let segs = v6.segments();
+    // Unique-local fc00::/7 (covers fd00::/8 private range).
+    if segs[0] & 0xFE00 == 0xFC00 {
+        return false;
+    }
+    // Link-local fe80::/10.
+    if segs[0] & 0xFFC0 == 0xFE80 {
+        return false;
+    }
+    // Documentation 2001:db8::/32.
+    if segs[0] == 0x2001 && segs[1] == 0x0DB8 {
+        return false;
+    }
+    // IPv4-mapped ::ffff:0:0/96 — recurse into the IPv4 guard.
+    if let Some(v4) = v6.to_ipv4_mapped() {
+        return is_public_v4(&v4);
+    }
+    // Deprecated IPv4-compatible ::0:0/96 (all zeros prefix) — treat
+    // as non-public.
+    if segs[0] == 0 && segs[1] == 0 && segs[2] == 0 && segs[3] == 0 && segs[4] == 0 && segs[5] == 0
+    {
+        return false;
+    }
+    true
 }
 
 /// Oblivious HTTP (OHTTP) client — **Tier 2 privacy** via K-anonymous relay.
@@ -290,18 +415,35 @@ impl TorClient {
     /// The returned [`TcpStream`] can be used with TLS wrappers and HTTP
     /// libraries as a drop-in transport.
     ///
+    /// # Security — error scrubbing
+    ///
+    /// Every failure mode — local Tor daemon not running, SOCKS5
+    /// protocol error, target unreachable via the exit node — folds
+    /// into the single opaque error string [`TOR_CONNECT_ERR_MSG`].
+    /// The previous implementation preserved the raw `tokio_socks`
+    /// error text, which distinguished "proxy down" from "target
+    /// unreachable" and could be used to fingerprint the user's local
+    /// network conditions or confirm target reachability if the
+    /// caller logs errors. Callers that need to distinguish failure
+    /// classes should probe the proxy's liveness separately.
+    ///
     /// # Errors
     ///
-    /// Returns [`NetworkError::TorProxy`] if the SOCKS5 proxy is unreachable,
-    /// rejects the connection, or cannot route to the target.
+    /// Returns [`NetworkError::TorProxy`] with the opaque
+    /// [`TOR_CONNECT_ERR_MSG`] on any failure.
     pub async fn connect(&self, target: &str) -> Result<TcpStream, NetworkError> {
         let stream = Socks5Stream::connect(&*self.socks_addr, target)
             .await
-            .map_err(|e| NetworkError::TorProxy(e.to_string()))?;
+            .map_err(|_| NetworkError::TorProxy(TOR_CONNECT_ERR_MSG.to_owned()))?;
 
         Ok(stream.into_inner())
     }
 }
+
+/// Opaque error string returned for any failure in [`TorClient::connect`].
+///
+/// See the security note on that method for the rationale.
+pub const TOR_CONNECT_ERR_MSG: &str = "Tor SOCKS5 connection failed";
 
 impl Default for TorClient {
     fn default() -> Self {
@@ -448,5 +590,100 @@ mod tests {
             .connect("example.com:80")
             .await
             .expect("Tor SOCKS5 connection failed");
+    }
+
+    // --- Finding #6: TorClient returns an opaque error ---
+
+    #[tokio::test]
+    async fn tor_connect_failure_is_opaque() {
+        // Point at a port that almost certainly isn't running a SOCKS5
+        // proxy. The error string must be the fixed opaque constant,
+        // with no underlying tokio_socks / OS-level detail.
+        let client = TorClient::with_socks_addr("127.0.0.1:1");
+        let err = client
+            .connect("example.com:443")
+            .await
+            .expect_err("must fail");
+        match err {
+            NetworkError::TorProxy(msg) => {
+                assert_eq!(msg, TOR_CONNECT_ERR_MSG);
+                // Defence in depth — ensure no socket-level noise leaks.
+                assert!(!msg.contains("Connection refused"));
+                assert!(!msg.contains("os error"));
+                assert!(!msg.contains("SOCKS"));
+            }
+            other => panic!("expected TorProxy, got {other:?}"),
+        }
+    }
+
+    // --- Finding #2: PrivacyDns filters private/loopback IPs ---
+
+    #[test]
+    fn private_v4_addresses_are_not_public() {
+        for s in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "192.168.1.1",
+            "172.16.0.1",
+            "169.254.169.254", // cloud metadata
+            "169.254.1.1",
+            "100.64.0.1",      // CGNAT
+            "198.18.0.1",      // benchmark
+            "0.0.0.0",
+            "255.255.255.255",
+            "224.0.0.1",       // multicast
+            "192.0.2.1",       // documentation
+        ] {
+            let ip: Ipv4Addr = s.parse().unwrap();
+            assert!(!is_public_v4(&ip), "{s} must not be public");
+        }
+    }
+
+    #[test]
+    fn public_v4_addresses_are_public() {
+        for s in ["1.1.1.1", "8.8.8.8", "93.184.216.34", "172.217.17.14"] {
+            let ip: Ipv4Addr = s.parse().unwrap();
+            assert!(is_public_v4(&ip), "{s} must be public");
+        }
+    }
+
+    #[test]
+    fn private_v6_addresses_are_not_public() {
+        for s in [
+            "::1",
+            "::",
+            "fe80::1",
+            "fd00::1", // unique-local
+            "fc00::1",
+            "ff02::1", // multicast
+            "2001:db8::1", // documentation
+            "::ffff:127.0.0.1", // mapped loopback
+            "::ffff:10.0.0.1",
+        ] {
+            let ip: Ipv6Addr = s.parse().unwrap();
+            assert!(!is_public_v6(&ip), "{s} must not be public");
+        }
+    }
+
+    #[test]
+    fn public_v6_addresses_are_public() {
+        for s in ["2606:4700:4700::1111", "2001:4860:4860::8888"] {
+            let ip: Ipv6Addr = s.parse().unwrap();
+            assert!(is_public_v6(&ip), "{s} must be public");
+        }
+    }
+
+    #[test]
+    fn ipv4_mapped_public_v6_is_public() {
+        let ip: Ipv6Addr = "::ffff:1.1.1.1".parse().unwrap();
+        assert!(is_public_v6(&ip));
+    }
+
+    // --- Finding #14: NetworkError is Send + Sync ---
+
+    #[test]
+    fn network_error_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<NetworkError>();
     }
 }

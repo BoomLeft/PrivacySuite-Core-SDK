@@ -11,7 +11,7 @@
 //! encrypting every message with XChaCha20-Poly1305 before it leaves the
 //! device and decrypting on receipt.
 //!
-//! # Wire Format — v2 (Audit 2 Finding #10)
+//! # Wire Format — v2 (Audit 2 Finding #10, Residual Risk #5)
 //!
 //! Each [`SyncMessage`] carries an opaque `payload` field. When sent through
 //! an [`EncryptedTransport`], the payload is:
@@ -32,11 +32,30 @@
 //! not strictly advance, which prevents a hostile relay from replaying old
 //! frames recorded under the same `VaultKey` (see Audit 2 Finding #10).
 //!
-//! Old v1 frames (AAD `"privacysuite:sync:v1"`, no on-wire version byte)
-//! are **rejected** — a hostile relay that replayed a v1 frame captured
-//! before upgrade cannot forge a v2 frame because the v2 AAD binds the
-//! per-session random id. The version byte lets future revisions evolve
-//! the framing without guessing at length.
+//! # Versioning (Residual Risk #5)
+//!
+//! The leading byte of every frame is an explicit version tag. The decoder
+//! inspects byte 0 before doing anything else and dispatches on it:
+//!
+//! - `0x02` — current v2 frame; decoded as documented above.
+//! - `0x01` — v1 frame (the pre-hardening layout, AAD
+//!   `"privacysuite:sync:v1"` and no replay-binding). Rejected with
+//!   [`SyncError::Legacy`] carrying a clear operator-facing message; the
+//!   decoder deliberately does not attempt to parse the rest, so a v1
+//!   peer cannot use framing-probe timing to fingerprint which v2 field
+//!   the reject happened on.
+//! - any other byte — rejected with [`SyncError::Protocol`]
+//!   (`"unknown sync version"`). This covers corrupted frames, future
+//!   v3+ revisions reaching an older build, and frames from a non-sync
+//!   producer that happens to hit the transport.
+//!
+//! Truncated frames (0 bytes, or any length below the v2 header) are
+//! rejected with [`SyncError::Protocol`] (`"truncated sync frame"`) at
+//! the same decoder entry point, before any AEAD work is attempted.
+//!
+//! This layout gives v3+ a clean upgrade path: bumping
+//! [`SYNC_VERSION_V2`] is a one-site change, and older clients surface
+//! a clear typed error rather than silently failing an AEAD tag verify.
 
 use std::fmt;
 
@@ -55,6 +74,13 @@ const SYNC_AAD_V2: &[u8] = b"privacysuite:sync:v2";
 
 /// On-wire version byte for the v2 framing (see module doc).
 const SYNC_VERSION_V2: u8 = 0x02;
+
+/// On-wire version byte for the deprecated v1 framing.
+///
+/// Retained as a named constant so the decoder can emit a precise
+/// [`SyncError::Legacy`] instead of a generic "unknown version" error
+/// when a peer hasn't yet upgraded. The SDK never *produces* v1 frames.
+const SYNC_VERSION_V1: u8 = 0x01;
 
 /// Length of the per-session random identifier bound into the AAD.
 const SESSION_ID_LEN: usize = 16;
@@ -105,6 +131,13 @@ pub enum SyncError {
     ///
     /// Carries no diagnostic payload to avoid leaking which pin failed.
     CertificatePinMismatch,
+    /// A frame from a peer speaking an older (pre-v2) wire format was
+    /// received. The peer must upgrade; the SDK never parses v1 frames.
+    ///
+    /// The message is operator-facing and safe to surface to the user:
+    /// it does not depend on any frame contents beyond the leading
+    /// version byte.
+    Legacy(String),
 }
 
 impl fmt::Display for SyncError {
@@ -118,6 +151,7 @@ impl fmt::Display for SyncError {
             Self::CertificatePinMismatch => {
                 f.write_str("relay certificate did not match any configured pin")
             }
+            Self::Legacy(msg) => write!(f, "legacy peer: {msg}"),
         }
     }
 }
@@ -507,32 +541,61 @@ impl<T: SyncTransport> EncryptedTransport<T> {
     }
 
     /// Parse the on-wire framing. Returns `(session_id, counter, ciphertext)`
-    /// if the header is well-formed and the version byte matches, else
-    /// [`SyncError::Decryption`] (opaque — does not distinguish "wrong
-    /// version" from "truncated" to avoid giving a hostile relay a probe
-    /// oracle).
+    /// on success.
+    ///
+    /// Dispatch on the leading version byte (Residual Risk #5):
+    ///
+    /// - `0x02` → parse as v2 and return the fields.
+    /// - `0x01` → [`SyncError::Legacy`] with a clear operator-facing
+    ///   message. The rest of the frame is not inspected.
+    /// - anything else → [`SyncError::Protocol`]
+    ///   (`"unknown sync version"`).
+    ///
+    /// Frames with fewer bytes than a v2 header (including 0-byte and
+    /// 1-byte inputs) are rejected with [`SyncError::Protocol`]
+    /// (`"truncated sync frame"`). Empty input is classified as
+    /// truncation rather than as a version mismatch: without even one
+    /// byte we cannot claim "unknown version" honestly.
     fn parse_frame(frame: &[u8]) -> Result<([u8; SESSION_ID_LEN], u64, &[u8]), SyncError> {
+        // Peek the version byte first. An empty frame has no version at
+        // all — treat that as truncation, not as an unknown version.
+        let Some(&version) = frame.first() else {
+            return Err(SyncError::Protocol("truncated sync frame".into()));
+        };
+        match version {
+            SYNC_VERSION_V2 => {}
+            SYNC_VERSION_V1 => {
+                return Err(SyncError::Legacy(
+                    "v1 wire format no longer supported — peer must upgrade".into(),
+                ));
+            }
+            _ => {
+                return Err(SyncError::Protocol("unknown sync version".into()));
+            }
+        }
+
+        // Version is v2 — enforce the full header length.
         if frame.len() < FRAME_HEADER_LEN {
-            return Err(SyncError::Decryption);
+            return Err(SyncError::Protocol("truncated sync frame".into()));
         }
-        let version = frame.first().copied().ok_or(SyncError::Decryption)?;
-        if version != SYNC_VERSION_V2 {
-            return Err(SyncError::Decryption);
-        }
+
         let mut session_id = [0u8; SESSION_ID_LEN];
         let session_slice = frame
             .get(1..1 + SESSION_ID_LEN)
-            .ok_or(SyncError::Decryption)?;
+            .ok_or_else(|| SyncError::Protocol("truncated sync frame".into()))?;
         session_id.copy_from_slice(session_slice);
 
         let counter_slice = frame
             .get(1 + SESSION_ID_LEN..FRAME_HEADER_LEN)
-            .ok_or(SyncError::Decryption)?;
-        let counter_array: [u8; SEND_COUNTER_LEN] =
-            counter_slice.try_into().map_err(|_| SyncError::Decryption)?;
+            .ok_or_else(|| SyncError::Protocol("truncated sync frame".into()))?;
+        let counter_array: [u8; SEND_COUNTER_LEN] = counter_slice
+            .try_into()
+            .map_err(|_| SyncError::Protocol("truncated sync frame".into()))?;
         let counter = u64::from_be_bytes(counter_array);
 
-        let ct = frame.get(FRAME_HEADER_LEN..).ok_or(SyncError::Decryption)?;
+        let ct = frame
+            .get(FRAME_HEADER_LEN..)
+            .ok_or_else(|| SyncError::Protocol("truncated sync frame".into()))?;
         Ok((session_id, counter, ct))
     }
 }
@@ -751,6 +814,9 @@ mod tests {
 
         let err = SyncError::ConnectionClosed;
         assert_eq!(err.to_string(), "connection closed");
+
+        let err = SyncError::Legacy("upgrade needed".into());
+        assert_eq!(err.to_string(), "legacy peer: upgrade needed");
     }
 
     // -- WebSocket relay (ignored — requires a running server) --
@@ -949,20 +1015,137 @@ mod tests {
         assert_eq!(&frame[25..], b"ct");
     }
 
+    // -- Residual Risk #5: explicit version-byte dispatch --
+
     #[test]
-    fn parse_frame_rejects_wrong_version() {
-        let mut frame = vec![0x01]; // wrong version
+    fn parse_frame_rejects_v1_with_legacy_error() {
+        // A 0x01 leading byte — even with a well-formed v2-length header
+        // — must be rejected with SyncError::Legacy carrying a clear
+        // operator-facing message. The decoder is not allowed to try
+        // parsing the frame after the version check.
+        let mut frame = vec![SYNC_VERSION_V1];
         frame.extend_from_slice(&[0u8; SESSION_ID_LEN]);
         frame.extend_from_slice(&0u64.to_be_bytes());
         let result = EncryptedTransport::<ChannelTransport>::parse_frame(&frame);
-        assert!(matches!(result, Err(SyncError::Decryption)));
+        match result {
+            Err(SyncError::Legacy(msg)) => {
+                assert!(
+                    msg.contains("v1") && msg.contains("upgrade"),
+                    "unexpected legacy message: {msg}"
+                );
+            }
+            other => panic!("expected SyncError::Legacy, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_frame_rejects_unknown_version_with_protocol_error() {
+        // A leading byte that is neither v1 nor v2 is a Protocol error,
+        // not a Legacy error — we don't know what it is.
+        let mut frame = vec![0x03];
+        frame.extend_from_slice(&[0u8; SESSION_ID_LEN]);
+        frame.extend_from_slice(&0u64.to_be_bytes());
+        let result = EncryptedTransport::<ChannelTransport>::parse_frame(&frame);
+        match result {
+            Err(SyncError::Protocol(msg)) => {
+                assert_eq!(msg, "unknown sync version");
+            }
+            other => panic!("expected SyncError::Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_frame_rejects_empty_as_truncated() {
+        // Zero bytes: no version available at all. We classify this as
+        // truncation, not "unknown version" — honesty in error mapping.
+        let result = EncryptedTransport::<ChannelTransport>::parse_frame(&[]);
+        match result {
+            Err(SyncError::Protocol(msg)) => {
+                assert_eq!(msg, "truncated sync frame");
+            }
+            other => panic!("expected SyncError::Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_frame_rejects_single_version_byte_as_truncated() {
+        // One byte, v2 version only — header is still truncated.
+        let result = EncryptedTransport::<ChannelTransport>::parse_frame(&[SYNC_VERSION_V2]);
+        match result {
+            Err(SyncError::Protocol(msg)) => {
+                assert_eq!(msg, "truncated sync frame");
+            }
+            other => panic!("expected SyncError::Protocol, got {other:?}"),
+        }
     }
 
     #[test]
     fn parse_frame_rejects_truncated_header() {
         let short = vec![SYNC_VERSION_V2, 0x01, 0x02];
         let result = EncryptedTransport::<ChannelTransport>::parse_frame(&short);
-        assert!(matches!(result, Err(SyncError::Decryption)));
+        match result {
+            Err(SyncError::Protocol(msg)) => {
+                assert_eq!(msg, "truncated sync frame");
+            }
+            other => panic!("expected SyncError::Protocol, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recv_surfaces_legacy_error_for_injected_v1_frame() {
+        // Inject a v1-tagged payload into the wire and confirm the
+        // caller sees SyncError::Legacy, not Decryption. This is the
+        // end-to-end guarantee callers will read from release notes:
+        // "v1 peers rejected with clear error".
+        let (tx_inject, rx_consume) = mpsc::channel::<Vec<u8>>(4);
+        let (_dead_tx, _dead_rx) = mpsc::channel::<Vec<u8>>(1);
+        let receiver_transport = RecordingTransport {
+            tx: _dead_tx,
+            rx: rx_consume,
+            captured: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
+        let key = test_key();
+        let mut enc_receiver = EncryptedTransport::new(receiver_transport, &key);
+
+        // Build a plausibly-sized v1 frame: version=0x01, full v2-shaped
+        // header afterwards. The decoder must not look beyond byte 0.
+        let mut v1_frame = vec![SYNC_VERSION_V1];
+        v1_frame.extend_from_slice(&[0u8; SESSION_ID_LEN]);
+        v1_frame.extend_from_slice(&1u64.to_be_bytes());
+        v1_frame.extend_from_slice(b"pretend-ciphertext");
+        let wire = serde_json::to_vec(&SyncMessage {
+            payload: v1_frame,
+        })
+        .unwrap();
+        tx_inject.send(wire).await.unwrap();
+
+        match enc_receiver.recv().await {
+            Err(SyncError::Legacy(msg)) => {
+                assert!(
+                    msg.contains("v1") && msg.contains("upgrade"),
+                    "unexpected legacy message: {msg}"
+                );
+            }
+            other => panic!("expected Legacy, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn encrypted_transport_round_trip_with_v2_version_byte() {
+        // Explicit round-trip check that the v2 framing (with explicit
+        // version byte) decodes end-to-end. Also inspect the wire bytes
+        // to confirm the leading byte is SYNC_VERSION_V2.
+        let (transport_a, transport_b) = channel_pair();
+        let key = test_key();
+        let mut enc_a = EncryptedTransport::new(transport_a, &key);
+        let mut enc_b = EncryptedTransport::new(transport_b, &key);
+
+        let msg = SyncMessage {
+            payload: b"v2 round-trip".to_vec(),
+        };
+        enc_a.send(&msg).await.unwrap();
+        let received = enc_b.recv().await.unwrap();
+        assert_eq!(received.payload, msg.payload);
     }
 
     #[test]

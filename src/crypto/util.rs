@@ -9,8 +9,27 @@ use crate::error::CryptoError;
 
 /// Fills a stack-allocated `[u8; N]` with OS-supplied entropy.
 ///
-/// This is the single entry point for randomness in the SDK — all other
-/// modules delegate here so there is exactly one call site to audit.
+/// This is the preferred entry point for variable-length RNG output in
+/// the SDK. Where possible, other modules delegate here so there is a
+/// single call site to audit; the HPKE ephemeral-scalar path in
+/// `networking::ohttp` now also routes through this helper.
+///
+/// # Remaining direct `OsRng` call sites (allow-listed)
+///
+/// The following sites use `OsRng` directly because the dalek crates
+/// take a `CryptoRng + RngCore` reference, and there is no ergonomic
+/// way to thread a `fill_random` call through those signatures without
+/// reimplementing scalar clamping or signing-key construction:
+///
+/// - `crypto::pairing::EphemeralKeypair::generate` →
+///   `ed25519_dalek::SigningKey::generate(&mut OsRng)` and the
+///   equivalent Ed25519 path.
+/// - `auth::registration_start` / `auth::login_start` → pass `&mut OsRng`
+///   to `opaque-ke` which requires a `CryptoRng` by type.
+///
+/// Every such site still reaches the same OS entropy source (`getrandom`
+/// via `OsRng::try_fill_bytes`). The enumeration here makes the surface
+/// auditable at a glance.
 ///
 /// # Errors
 ///

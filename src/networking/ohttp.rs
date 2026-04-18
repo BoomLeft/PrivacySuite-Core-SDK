@@ -90,6 +90,17 @@ const OHTTP_INFO: &[u8] = b"message/bhttp request";
 /// Exporter label for OHTTP response, per RFC 9458 §4.4.
 const OHTTP_EXPORT_LABEL: &[u8] = b"message/bhttp response";
 
+/// SECURITY: Single opaque error string for every AEAD / HPKE failure
+/// path in this module. RFC 9458 §4.5 requires that the client not
+/// expose information that distinguishes one AEAD failure class from
+/// another, and the same discipline applies to HPKE `Seal` and
+/// HPKE/HKDF key-derivation errors — an attacker that can observe
+/// distinct `Display` strings on a malicious-relay path learns where
+/// their tampering landed, which is exactly the "structural" leak
+/// the spec is asking us not to provide. Every fallible step in the
+/// OHTTP encrypt/decrypt pipeline now reports this same string.
+const AEAD_FAIL_ERR_MSG: &str = "OHTTP response decryption failed";
+
 // =========================================================================
 // Public API
 // =========================================================================
@@ -133,6 +144,14 @@ pub struct OhttpResponse {
 ///
 /// - POST the given `body` to `url` with
 ///   `Content-Type: message/ohttp-req`.
+/// - **Verify** that the HTTP response carries
+///   `Content-Type: message/ohttp-res` (RFC 9458 §4.4). If the header is
+///   missing or has any other value, treat the response as a protocol
+///   violation and return [`NetworkError::Connection`] — do **not**
+///   forward the body to the SDK. The current trait shape returns only
+///   the body, so the transport is the only layer able to enforce this
+///   header. A future revision of the trait may return headers
+///   alongside the body so the SDK can enforce the check itself.
 /// - Treat a 200-class response's body as the OHTTP response capsule and
 ///   return it verbatim.
 /// - Translate non-2xx statuses, TLS failures, DNS failures, etc. into
@@ -142,6 +161,12 @@ pub struct OhttpResponse {
 #[async_trait]
 pub trait OhttpTransport: Send + Sync + std::fmt::Debug {
     /// POST `body` to `url` and return the raw response body on success.
+    ///
+    /// # Required checks by the implementer
+    ///
+    /// - Request `Content-Type` must be `message/ohttp-req`.
+    /// - Response `Content-Type` must be `message/ohttp-res` — see the
+    ///   trait-level docs.
     ///
     /// # Errors
     ///
@@ -254,7 +279,7 @@ impl OhttpClient {
 
         // 3. HPKE SetupBaseS → (enc, ctx).
         let info = ohttp_info(&hdr);
-        let (enc, mut ctx) = hpke::setup_base_s(&self.gateway_pk, &info)?;
+        let (mut enc, mut ctx) = hpke::setup_base_s(&self.gateway_pk, &info)?;
 
         // 4. Seal(aad=hdr, plaintext=bhttp_request) at sequence 0.
         let ciphertext = ctx.seal(&hdr, &bhttp_request)?;
@@ -266,6 +291,11 @@ impl OhttpClient {
         capsule.extend_from_slice(&ciphertext);
 
         // 6. Derive the response-decryption secret BEFORE we drop ctx.
+        // SECURITY: `export_secret` is a `Vec<u8>` holding HPKE exporter
+        // output. `Vec<u8>` does not zeroise on drop by default, so the
+        // bytes would otherwise sit in the heap allocator's free list
+        // until reuse. We explicitly `zeroize()` it after `decrypt_response`
+        // returns (see `_guard` below).
         let export_secret = ctx.export(OHTTP_EXPORT_LABEL, RESPONSE_NONCE_LEN)?;
         drop(ctx); // explicit early drop to zeroize HPKE key material now
 
@@ -275,8 +305,13 @@ impl OhttpClient {
             .post_capsule(&self.config.relay_url, capsule)
             .await?;
 
-        // 8. Decrypt response.
-        decrypt_response(&enc, &export_secret, &response_capsule)
+        // 8. Decrypt response. `export_secret` and `enc` are explicitly
+        //    zeroised at scope exit regardless of success or failure.
+        let result = decrypt_response(&enc, &export_secret, &response_capsule);
+        let mut export_secret = export_secret;
+        export_secret.zeroize();
+        enc.zeroize();
+        result
     }
 }
 
@@ -327,33 +362,63 @@ fn decrypt_response(
     let mut salt = Vec::with_capacity(enc.len() + response_nonce.len());
     salt.extend_from_slice(enc);
     salt.extend_from_slice(response_nonce);
-    let prk = hkdf_extract(&salt, export_secret);
+    // SECURITY: `prk` is HKDF-SHA256 output derived from the HPKE exporter
+    // secret. It must be zeroised at function end — a post-return coredump
+    // that captured `prk` plus the response capsule would let an attacker
+    // reconstruct the AEAD key + nonce and decrypt the response offline.
+    let mut prk = hkdf_extract(&salt, export_secret)
+        .map_err(|_| aead_fail_err())?;
     salt.zeroize();
 
     // aead_key   = HKDF-Expand(prk, "key",   Nk)
     // aead_nonce = HKDF-Expand(prk, "nonce", Nn)
-    let mut aead_key = hkdf_expand(&prk, b"key", N_K)?;
-    let mut aead_nonce = hkdf_expand(&prk, b"nonce", N_N)?;
+    let expand_key = hkdf_expand(&prk, b"key", N_K);
+    let expand_nonce = hkdf_expand(&prk, b"nonce", N_N);
+    let mut aead_key = match expand_key {
+        Ok(k) => k,
+        Err(_) => {
+            prk.zeroize();
+            return Err(aead_fail_err());
+        }
+    };
+    let mut aead_nonce = match expand_nonce {
+        Ok(n) => n,
+        Err(_) => {
+            prk.zeroize();
+            aead_key.zeroize();
+            return Err(aead_fail_err());
+        }
+    };
 
-    let cipher = ChaCha20Poly1305::new_from_slice(&aead_key)
-        .map_err(|_| NetworkError::Connection("bad response AEAD key".to_owned()))?;
+    // SECURITY: Every fallible call below folds into a single opaque
+    // error string per RFC 9458 §4.5 — a caller that logs the Display
+    // form of the returned NetworkError must not be able to distinguish
+    // "AEAD key construction failed" from "AEAD tag verification failed".
+    let cipher_result = ChaCha20Poly1305::new_from_slice(&aead_key);
     let nonce = Chacha20Nonce::from_slice(&aead_nonce);
     let payload = Payload {
         msg: aead_ct,
         aad: b"",
     };
 
-    let plaintext = cipher.decrypt(nonce, payload).map_err(|_| {
-        // Always return the same opaque error on AEAD failure to avoid
-        // leaking any structural information about the response.
-        NetworkError::Connection("OHTTP response decryption failed".to_owned())
-    });
+    let plaintext = match cipher_result {
+        Ok(cipher) => cipher.decrypt(nonce, payload).map_err(|_| aead_fail_err()),
+        Err(_) => Err(aead_fail_err()),
+    };
 
     aead_key.zeroize();
     aead_nonce.zeroize();
+    prk.zeroize();
 
     let plaintext = plaintext?;
     bhttp::decode_response(&plaintext)
+}
+
+/// Build the single opaque AEAD-failure error used across the HPKE and
+/// response pipelines. See [`AEAD_FAIL_ERR_MSG`].
+#[inline]
+fn aead_fail_err() -> NetworkError {
+    NetworkError::Connection(AEAD_FAIL_ERR_MSG.to_owned())
 }
 
 // =========================================================================
@@ -367,15 +432,15 @@ mod hpke {
 
     use chacha20poly1305::aead::{Aead, KeyInit, Payload};
     use chacha20poly1305::{ChaCha20Poly1305, Nonce as Chacha20Nonce};
-    use rand_core::OsRng;
     use x25519_dalek::{PublicKey, StaticSecret};
     use zeroize::Zeroize;
 
     use super::{
-        labeled_expand, labeled_extract, suite_id_hpke, suite_id_kem, NetworkError,
+        aead_fail_err, labeled_expand, labeled_extract, suite_id_hpke, suite_id_kem, NetworkError,
         AEAD_ID_CHACHA20_POLY1305, HPKE_MODE_BASE, KDF_ID_HKDF_SHA256, KEM_ID_X25519_HKDF_SHA256,
         N_H, N_K, N_N, N_PK, N_SECRET,
     };
+    use crate::crypto::util::fill_random;
 
     /// Output of `SetupBaseS`: sealing context. The encapsulated key is
     /// returned separately so the caller can ship it in the capsule.
@@ -403,8 +468,22 @@ mod hpke {
         info: &[u8],
     ) -> Result<([u8; N_PK], SenderContext), NetworkError> {
         // --- DHKEM.Encap(pkR) ---
-        // (skE, pkE) <- GenerateKeyPair
-        let sk_e = StaticSecret::random_from_rng(OsRng);
+        // SECURITY: (skE, pkE) <- GenerateKeyPair
+        //
+        // Route the 32-byte ephemeral scalar through the SDK's central
+        // `fill_random` helper instead of calling `StaticSecret::random_from_rng(OsRng)`
+        // directly. `fill_random` wraps `OsRng::try_fill_bytes` with a
+        // `CryptoError::Rng` on failure — using it here keeps this site
+        // consistent with the SDK's documented "single entry point for
+        // randomness" policy and turns a catastrophic RNG failure into a
+        // typed error rather than a panic path. `StaticSecret::from(bytes)`
+        // then clamps per RFC 7748 §5 on construction.
+        let mut sk_bytes = fill_random::<32>()
+            .map_err(|_| NetworkError::Connection(
+                "OHTTP ephemeral key generation failed".to_owned(),
+            ))?;
+        let sk_e = StaticSecret::from(sk_bytes);
+        sk_bytes.zeroize();
         let pk_e = PublicKey::from(&sk_e);
 
         // SECURITY: reject the case where our own ephemeral public key is
@@ -433,9 +512,10 @@ mod hpke {
 
         // shared_secret = ExtractAndExpand(dh, kem_context)
         let suite_kem = suite_id_kem(KEM_ID_X25519_HKDF_SHA256);
-        let eae_prk = labeled_extract(&[], &suite_kem, b"eae_prk", &dh_bytes);
+        let mut eae_prk = labeled_extract(&[], &suite_kem, b"eae_prk", &dh_bytes)?;
         let mut shared_secret =
             labeled_expand(&eae_prk, &suite_kem, b"shared_secret", &kem_context, N_SECRET)?;
+        eae_prk.zeroize();
         dh_bytes.zeroize();
 
         // --- KeySchedule<ROLE_S>(mode_base, shared_secret, info, psk="", psk_id="") ---
@@ -445,14 +525,17 @@ mod hpke {
             AEAD_ID_CHACHA20_POLY1305,
         );
 
-        let psk_id_hash = labeled_extract(&[], &suite_hpke, b"psk_id_hash", b"");
-        let info_hash = labeled_extract(&[], &suite_hpke, b"info_hash", info);
+        let mut psk_id_hash = labeled_extract(&[], &suite_hpke, b"psk_id_hash", b"")?;
+        let mut info_hash = labeled_extract(&[], &suite_hpke, b"info_hash", info)?;
         let mut ksc = Vec::with_capacity(1 + N_H + N_H);
         ksc.push(HPKE_MODE_BASE);
         ksc.extend_from_slice(&psk_id_hash);
         ksc.extend_from_slice(&info_hash);
+        // Both hashes are now copied into `ksc`; wipe the originals.
+        psk_id_hash.zeroize();
+        info_hash.zeroize();
 
-        let mut secret = labeled_extract(&shared_secret, &suite_hpke, b"secret", b"");
+        let mut secret = labeled_extract(&shared_secret, &suite_hpke, b"secret", b"")?;
         let mut key_vec = labeled_expand(&secret, &suite_hpke, b"key", &ksc, N_K)?;
         let mut nonce_vec = labeled_expand(&secret, &suite_hpke, b"base_nonce", &ksc, N_N)?;
         let mut exp_vec = labeled_expand(&secret, &suite_hpke, b"exp", &ksc, N_H)?;
@@ -504,8 +587,13 @@ mod hpke {
                 *slot ^= b;
             }
 
+            // SECURITY: Collapse both failure modes to the single opaque
+            // `AEAD_FAIL_ERR_MSG` — see the module-level comment on that
+            // constant. A caller logging the Display form of the error
+            // must not be able to distinguish "AEAD key init failed" from
+            // "AEAD encryption failed".
             let cipher = ChaCha20Poly1305::new_from_slice(&self.key)
-                .map_err(|_| NetworkError::Connection("bad HPKE AEAD key".to_owned()))?;
+                .map_err(|_| aead_fail_err())?;
             let result = cipher.encrypt(
                 Chacha20Nonce::from_slice(&nonce),
                 Payload {
@@ -515,8 +603,7 @@ mod hpke {
             );
             nonce.zeroize();
 
-            let ct =
-                result.map_err(|_| NetworkError::Connection("HPKE Seal failed".to_owned()))?;
+            let ct = result.map_err(|_| aead_fail_err())?;
             self.seq = self
                 .seq
                 .checked_add(1)
@@ -551,17 +638,27 @@ mod hpke {
 // =========================================================================
 
 /// HKDF-SHA256 Extract (RFC 5869 §2.2).
-fn hkdf_extract(salt: &[u8], ikm: &[u8]) -> [u8; N_H] {
+///
+/// # Errors
+///
+/// Returns [`NetworkError::Connection`] with the opaque
+/// [`AEAD_FAIL_ERR_MSG`] on HMAC initialisation failure. HMAC-SHA256
+/// accepts any key length today, so this path is unreachable, but
+/// returning an error instead of a silent all-zero PRK ensures that a
+/// future dependency upgrade that tightens this contract cannot produce
+/// a deterministic PRK that collapses every downstream AEAD key.
+fn hkdf_extract(salt: &[u8], ikm: &[u8]) -> Result<[u8; N_H], NetworkError> {
     let salt = if salt.is_empty() { &[0u8; N_H][..] } else { salt };
-    // Disambiguate: `new_from_slice` is on both `Mac` and AEAD `KeyInit`.
-    let Ok(mut mac) = <HmacSha256 as Mac>::new_from_slice(salt) else {
-        return [0u8; N_H];
-    };
+    // SECURITY: Disambiguate — `new_from_slice` is on both `Mac` and AEAD
+    // `KeyInit`. We explicitly propagate the failure instead of falling
+    // through with an all-zero PRK; see the doc-comment above.
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(salt)
+        .map_err(|_| NetworkError::Connection(AEAD_FAIL_ERR_MSG.to_owned()))?;
     mac.update(ikm);
     let tag = mac.finalize().into_bytes();
     let mut out = [0u8; N_H];
     out.copy_from_slice(&tag);
-    out
+    Ok(out)
 }
 
 /// HKDF-SHA256 Expand (RFC 5869 §2.3).
@@ -612,7 +709,17 @@ fn hkdf_expand(prk: &[u8], info: &[u8], output_len: usize) -> Result<Vec<u8>, Ne
 ///
 /// `labeled_ikm = "HPKE-v1" || suite_id || label || ikm`
 /// returns `HKDF-Extract(salt, labeled_ikm)`.
-fn labeled_extract(salt: &[u8], suite_id: &[u8], label: &[u8], ikm: &[u8]) -> [u8; N_H] {
+///
+/// # Errors
+///
+/// Propagates the [`hkdf_extract`] error; see that function's
+/// documentation.
+fn labeled_extract(
+    salt: &[u8],
+    suite_id: &[u8],
+    label: &[u8],
+    ikm: &[u8],
+) -> Result<[u8; N_H], NetworkError> {
     let mut labeled = Vec::with_capacity(HPKE_V1.len() + suite_id.len() + label.len() + ikm.len());
     labeled.extend_from_slice(HPKE_V1);
     labeled.extend_from_slice(suite_id);
@@ -684,10 +791,86 @@ mod bhttp {
     const FRAMING_REQUEST_KNOWN_LENGTH: u64 = 0;
     const FRAMING_RESPONSE_KNOWN_LENGTH: u64 = 1;
 
+    /// Returns `true` for the `tchar` set of RFC 9110 §5.6.2 — the
+    /// characters permitted in an HTTP field-name / token.
+    ///
+    /// `tchar = "!" / "#" / "$" / "%" / "&" / "'" / "*" / "+" / "-" /
+    ///          "." / "^" / "_" / "`" / "|" / "~" / DIGIT / ALPHA`
+    fn is_tchar(b: u8) -> bool {
+        matches!(
+            b,
+            b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+'
+            | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~'
+            | b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z'
+        )
+    }
+
+    /// Reject any byte that would let a naive Gateway-side HTTP/1.1 / HTTP/2
+    /// emitter turn a BHTTP field into a new header, status line, or NUL-
+    /// delimited record. Per RFC 9110 §5.5, CR/LF are illegal in
+    /// field-values regardless of context; NUL is explicitly disallowed
+    /// by most HTTP serialisers. This is defence-in-depth against a
+    /// request-smuggling-at-the-Gateway class of attack where the SDK
+    /// caller forwards an attacker-influenced header.
+    fn reject_forbidden_value_bytes(
+        field: &str,
+        value: &[u8],
+    ) -> Result<(), NetworkError> {
+        if value
+            .iter()
+            .any(|&b| b == b'\r' || b == b'\n' || b == 0)
+        {
+            return Err(NetworkError::InvalidConfiguration(format!(
+                "BHTTP {field} contains forbidden byte (CR/LF/NUL)"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Reject header names that aren't pure RFC 9110 `tchar`.
+    fn reject_invalid_header_name(name: &str) -> Result<(), NetworkError> {
+        if name.is_empty() {
+            return Err(NetworkError::InvalidConfiguration(
+                "BHTTP header name must not be empty".to_owned(),
+            ));
+        }
+        if !name.bytes().all(is_tchar) {
+            return Err(NetworkError::InvalidConfiguration(
+                "BHTTP header name contains non-tchar byte".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Reject HTTP method strings that aren't pure RFC 9110 `tchar`.
+    /// Methods are tokens per §9.1.
+    fn reject_invalid_method(method: &str) -> Result<(), NetworkError> {
+        if method.is_empty() {
+            return Err(NetworkError::InvalidConfiguration(
+                "BHTTP method must not be empty".to_owned(),
+            ));
+        }
+        if !method.bytes().all(is_tchar) {
+            return Err(NetworkError::InvalidConfiguration(
+                "BHTTP method contains non-tchar byte".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Encode an [`OhttpRequest`] as a known-length BHTTP request
     /// (RFC 9292 §3.2).
     pub(super) fn encode_request(req: &OhttpRequest) -> Result<Vec<u8>, NetworkError> {
         let (scheme, authority, path) = split_url(&req.url)?;
+
+        // SECURITY: RFC 9292 §3.5 puts the burden of CRLF rejection on
+        // the Gateway-side HTTP emitter, but defence-in-depth on the
+        // client is cheap and stops request-smuggling before the capsule
+        // leaves our process. Validate method (as a token), the path
+        // (as a field-value for CR/LF/NUL), and every header name/value.
+        reject_invalid_method(&req.method)?;
+        reject_forbidden_value_bytes("path", path.as_bytes())?;
+        reject_forbidden_value_bytes("authority", authority.as_bytes())?;
 
         let mut out = Vec::with_capacity(256 + req.body.len());
         write_varint(&mut out, FRAMING_REQUEST_KNOWN_LENGTH);
@@ -699,7 +882,12 @@ mod bhttp {
 
         let mut header_buf = Vec::with_capacity(128);
         for (name, value) in &req.headers {
-            // Header field names MUST be lowercased per RFC 9292 §3.3.
+            // Header field names MUST be lowercased per RFC 9292 §3.3 and
+            // MUST obey the RFC 9110 `tchar` grammar. Header values MUST
+            // NOT contain CR/LF/NUL (defence-in-depth against smuggling
+            // through a downstream HTTP/1.1 serializer).
+            reject_invalid_header_name(name)?;
+            reject_forbidden_value_bytes("header value", value.as_bytes())?;
             write_lenprefixed(&mut header_buf, name.to_lowercase().as_bytes())?;
             write_lenprefixed(&mut header_buf, value.as_bytes())?;
         }
@@ -1152,7 +1340,8 @@ mod tests {
         kem_context.extend_from_slice(pk_r.as_bytes());
 
         let suite_kem = suite_id_kem(KEM_ID_X25519_HKDF_SHA256);
-        let eae_prk = labeled_extract(&[], &suite_kem, b"eae_prk", &dh_bytes);
+        let eae_prk = labeled_extract(&[], &suite_kem, b"eae_prk", &dh_bytes)
+            .map_err(|_| NetworkError::Connection("extract eae_prk".into()))?;
         let shared_secret =
             labeled_expand(&eae_prk, &suite_kem, b"shared_secret", &kem_context, N_SECRET)
                 .map_err(|_| NetworkError::Connection("expand shared_secret".into()))?;
@@ -1163,13 +1352,16 @@ mod tests {
             AEAD_ID_CHACHA20_POLY1305,
         );
         let info = ohttp_info(&hdr);
-        let psk_id_hash = labeled_extract(&[], &suite_hpke, b"psk_id_hash", b"");
-        let info_hash = labeled_extract(&[], &suite_hpke, b"info_hash", &info);
+        let psk_id_hash = labeled_extract(&[], &suite_hpke, b"psk_id_hash", b"")
+            .map_err(|_| NetworkError::Connection("extract psk_id_hash".into()))?;
+        let info_hash = labeled_extract(&[], &suite_hpke, b"info_hash", &info)
+            .map_err(|_| NetworkError::Connection("extract info_hash".into()))?;
         let mut ksc = Vec::with_capacity(1 + N_H + N_H);
         ksc.push(HPKE_MODE_BASE);
         ksc.extend_from_slice(&psk_id_hash);
         ksc.extend_from_slice(&info_hash);
-        let secret = labeled_extract(&shared_secret, &suite_hpke, b"secret", b"");
+        let secret = labeled_extract(&shared_secret, &suite_hpke, b"secret", b"")
+            .map_err(|_| NetworkError::Connection("extract secret".into()))?;
 
         let key = labeled_expand(&secret, &suite_hpke, b"key", &ksc, N_K)
             .map_err(|_| NetworkError::Connection("expand key".into()))?;
@@ -1204,7 +1396,8 @@ mod tests {
         let mut salt = Vec::with_capacity(enc.len() + response_nonce.len());
         salt.extend_from_slice(&enc);
         salt.extend_from_slice(&response_nonce);
-        let prk = hkdf_extract(&salt, &export_secret);
+        let prk = hkdf_extract(&salt, &export_secret)
+            .map_err(|_| NetworkError::Connection("extract prk".into()))?;
         let aead_key = hkdf_expand(&prk, b"key", N_K)
             .map_err(|_| NetworkError::Connection("expand aead key".into()))?;
         let aead_nonce = hkdf_expand(&prk, b"nonce", N_N)
@@ -1487,5 +1680,196 @@ mod tests {
         let decoded = bhttp::decode_response(&out).unwrap();
         assert_eq!(decoded.status, 200);
         assert_eq!(decoded.body, b"hi");
+    }
+
+    // --- Finding #1 regression: BHTTP encoder must reject CR/LF/NUL ---
+
+    #[test]
+    fn bhttp_rejects_crlf_in_header_value() {
+        let req = OhttpRequest {
+            method: "GET".into(),
+            url: "https://example.com/".into(),
+            headers: vec![(
+                "x-smuggled".into(),
+                "ok\r\nX-Injected: pwned".into(),
+            )],
+            body: vec![],
+        };
+        let err = bhttp::encode_request(&req).expect_err("CRLF must be rejected");
+        assert!(matches!(err, NetworkError::InvalidConfiguration(_)));
+    }
+
+    #[test]
+    fn bhttp_rejects_bare_lf_in_header_value() {
+        let req = OhttpRequest {
+            method: "GET".into(),
+            url: "https://example.com/".into(),
+            headers: vec![("x-a".into(), "value\nwith lf".into())],
+            body: vec![],
+        };
+        assert!(matches!(
+            bhttp::encode_request(&req),
+            Err(NetworkError::InvalidConfiguration(_))
+        ));
+    }
+
+    #[test]
+    fn bhttp_rejects_nul_in_header_value() {
+        let req = OhttpRequest {
+            method: "GET".into(),
+            url: "https://example.com/".into(),
+            headers: vec![("x-a".into(), "value\x00with nul".into())],
+            body: vec![],
+        };
+        assert!(matches!(
+            bhttp::encode_request(&req),
+            Err(NetworkError::InvalidConfiguration(_))
+        ));
+    }
+
+    #[test]
+    fn bhttp_rejects_crlf_in_header_name() {
+        let req = OhttpRequest {
+            method: "GET".into(),
+            url: "https://example.com/".into(),
+            headers: vec![("x-\r\nX-Injected".into(), "value".into())],
+            body: vec![],
+        };
+        assert!(matches!(
+            bhttp::encode_request(&req),
+            Err(NetworkError::InvalidConfiguration(_))
+        ));
+    }
+
+    #[test]
+    fn bhttp_rejects_space_in_header_name() {
+        // Space is not a tchar per RFC 9110 §5.6.2.
+        let req = OhttpRequest {
+            method: "GET".into(),
+            url: "https://example.com/".into(),
+            headers: vec![("x a".into(), "value".into())],
+            body: vec![],
+        };
+        assert!(matches!(
+            bhttp::encode_request(&req),
+            Err(NetworkError::InvalidConfiguration(_))
+        ));
+    }
+
+    #[test]
+    fn bhttp_rejects_empty_header_name() {
+        let req = OhttpRequest {
+            method: "GET".into(),
+            url: "https://example.com/".into(),
+            headers: vec![(String::new(), "value".into())],
+            body: vec![],
+        };
+        assert!(matches!(
+            bhttp::encode_request(&req),
+            Err(NetworkError::InvalidConfiguration(_))
+        ));
+    }
+
+    #[test]
+    fn bhttp_rejects_crlf_in_method() {
+        let req = OhttpRequest {
+            method: "GET\r\nHOST: evil.example".into(),
+            url: "https://example.com/".into(),
+            headers: vec![],
+            body: vec![],
+        };
+        assert!(matches!(
+            bhttp::encode_request(&req),
+            Err(NetworkError::InvalidConfiguration(_))
+        ));
+    }
+
+    #[test]
+    fn bhttp_rejects_crlf_in_url_path() {
+        let req = OhttpRequest {
+            method: "GET".into(),
+            url: "https://example.com/path\r\nX-Smuggle: 1".into(),
+            headers: vec![],
+            body: vec![],
+        };
+        assert!(matches!(
+            bhttp::encode_request(&req),
+            Err(NetworkError::InvalidConfiguration(_))
+        ));
+    }
+
+    #[test]
+    fn bhttp_accepts_valid_rfc_9110_tchar_header_name() {
+        // `tchar` includes digits, ALPHA, and a specific punctuation set.
+        let req = OhttpRequest {
+            method: "GET".into(),
+            url: "https://example.com/".into(),
+            headers: vec![(
+                "X-Custom!#$%&'*+-.^_`|~1234567890".into(),
+                "value".into(),
+            )],
+            body: vec![],
+        };
+        let bytes = bhttp::encode_request(&req).expect("tchar header name accepted");
+        let decoded = bhttp::decode_request(&bytes).unwrap();
+        assert_eq!(decoded.headers.len(), 1);
+    }
+
+    // --- Finding #2 regression: opaque AEAD failure string ---
+
+    #[tokio::test]
+    async fn tampered_response_returns_single_opaque_error_string() {
+        // A caller logging the NetworkError Display form must see the
+        // SAME string regardless of whether tampering was detected at
+        // the AEAD tag step or at a structural pre-check. This test
+        // asserts the Display form for tampered capsules, since that is
+        // the only failure reachable from outside without mocking HKDF.
+        let (sk, pk) = gateway_keypair();
+        let responder = |_req: OhttpRequest| OhttpResponse {
+            status: 200,
+            headers: vec![],
+            body: b"ok".to_vec(),
+        };
+        let good = MockTransport::with_gateway(sk, responder);
+
+        #[derive(Debug)]
+        struct Tamper {
+            inner: Arc<MockTransport>,
+        }
+        #[async_trait]
+        impl OhttpTransport for Tamper {
+            async fn post_capsule(
+                &self,
+                url: &str,
+                body: Vec<u8>,
+            ) -> Result<Vec<u8>, NetworkError> {
+                let mut resp = self.inner.post_capsule(url, body).await?;
+                if let Some(last) = resp.last_mut() {
+                    *last ^= 0x01;
+                }
+                Ok(resp)
+            }
+        }
+        let tamper: Arc<dyn OhttpTransport> = Arc::new(Tamper { inner: good });
+        let client = OhttpClient::new(config_for_pk(&pk), tamper).unwrap();
+
+        let req = OhttpRequest {
+            method: "GET".into(),
+            url: "https://upstream.test/".into(),
+            headers: vec![],
+            body: vec![],
+        };
+        let err = client.send(req).await.unwrap_err();
+        let msg = err.to_string();
+        // Whatever the code path, the Display form of the error should
+        // carry the opaque string — no distinguishable substrings that
+        // identify a specific internal failure mode.
+        assert!(
+            msg.contains(AEAD_FAIL_ERR_MSG),
+            "expected opaque AEAD failure in {msg:?}"
+        );
+        assert!(!msg.contains("bad response AEAD key"));
+        assert!(!msg.contains("bad HPKE AEAD key"));
+        assert!(!msg.contains("HPKE Seal failed"));
     }
 }

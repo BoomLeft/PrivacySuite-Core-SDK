@@ -347,9 +347,15 @@ pub fn hkdf_sha256_expand(
 /// HKDF-SHA256 Extract (RFC 5869 Section 2.2).
 ///
 /// Extracts a 32-byte pseudorandom key from input key material.
+///
+/// # Security
+///
+/// Returns an error if HMAC initialisation fails instead of producing
+/// a zero PRK on the (unreachable-today) failure path, which would
+/// otherwise collapse downstream keys to deterministic values.
 #[uniffi::export]
-pub fn hkdf_sha256_extract(salt: Vec<u8>, ikm: Vec<u8>) -> Vec<u8> {
-    hkdf::hkdf_extract(&salt, &ikm).to_vec()
+pub fn hkdf_sha256_extract(salt: Vec<u8>, ikm: Vec<u8>) -> Result<Vec<u8>, PrivacySuiteError> {
+    Ok(hkdf::hkdf_extract(&salt, &ikm)?.to_vec())
 }
 
 /// Generates cryptographically secure random bytes.

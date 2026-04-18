@@ -34,27 +34,28 @@ pub const HKDF_SHA256_MAX_OUTPUT: usize = 255 * 32;
 ///
 /// A 32-byte pseudorandom key suitable for use with [`hkdf_expand`].
 ///
-/// # Panics
+/// # Errors
 ///
-/// Does not panic: HMAC-SHA256 accepts keys of any length, so the
-/// `new_from_slice` call is infallible. If a future dependency upgrade ever
-/// makes this fallible, we fall back to a zero-initialised PRK so the
-/// library never produces a partially-initialised output.
-#[must_use]
-pub fn hkdf_extract(salt: &[u8], ikm: &[u8]) -> [u8; 32] {
+/// Returns [`CryptoError::KeyDerivation`] if HMAC initialisation fails.
+/// Today `HmacSha256::new_from_slice` accepts any key length and cannot
+/// fail, but we propagate the error explicitly so that a future
+/// dependency upgrade that tightens this contract cannot silently
+/// produce an all-zero PRK (which would be catastrophic — an attacker
+/// who can trigger this path would decrypt every message whose key is
+/// derived from the affected PRK).
+pub fn hkdf_extract(salt: &[u8], ikm: &[u8]) -> Result<[u8; 32], CryptoError> {
     let salt = if salt.is_empty() { &[0u8; 32][..] } else { salt };
     // SECURITY: HMAC-SHA256 accepts any key length — this cannot fail in
-    // practice. We still avoid `.expect()` (project policy: no panics in
-    // crypto paths) and instead fall through to a safe zero output if the
-    // invariant is ever violated.
-    let Ok(mut mac) = HmacSha256::new_from_slice(salt) else {
-        return [0u8; 32];
-    };
+    // practice today. We return a `CryptoError::KeyDerivation` on the
+    // impossible path rather than producing a deterministic all-zero PRK
+    // (which an attacker could chain into a decryption oracle if the
+    // invariant is ever violated by a future crate upgrade).
+    let mut mac = HmacSha256::new_from_slice(salt).map_err(|_| CryptoError::KeyDerivation)?;
     mac.update(ikm);
     let result = mac.finalize();
     let mut out = [0u8; 32];
     out.copy_from_slice(&result.into_bytes());
-    out
+    Ok(out)
 }
 
 /// Performs HKDF-Expand (RFC 5869 Section 2.3).
@@ -130,7 +131,7 @@ pub fn hkdf_expand(prk: &[u8], info: &[u8], output_len: usize) -> Result<Vec<u8>
 ///
 /// Same as [`hkdf_expand`].
 pub fn hkdf(salt: &[u8], ikm: &[u8], info: &[u8], output_len: usize) -> Result<Vec<u8>, CryptoError> {
-    let mut prk = hkdf_extract(salt, ikm);
+    let mut prk = hkdf_extract(salt, ikm)?;
     let result = hkdf_expand(&prk, info, output_len);
     prk.zeroize();
     result
@@ -153,11 +154,28 @@ mod tests {
             "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865",
         ).unwrap();
 
-        let prk = hkdf_extract(&salt, &ikm);
+        let prk = hkdf_extract(&salt, &ikm).unwrap();
         assert_eq!(&prk[..], &expected_prk[..]);
 
         let okm = hkdf_expand(&prk, &info, 42).unwrap();
         assert_eq!(&okm[..], &expected_okm[..]);
+    }
+
+    #[test]
+    fn extract_with_empty_salt_uses_zero_salt() {
+        // Per RFC 5869, an empty salt is interpreted as 32 zero bytes.
+        let empty_salt_prk = hkdf_extract(&[], b"ikm").unwrap();
+        let zero_salt_prk = hkdf_extract(&[0u8; 32], b"ikm").unwrap();
+        assert_eq!(empty_salt_prk, zero_salt_prk);
+    }
+
+    #[test]
+    fn extract_never_returns_all_zero_prk_for_nonempty_ikm() {
+        // Defence-in-depth: the former silent-zero-output fallback path would
+        // have produced [0u8; 32] on MAC-init failure. Any future regression
+        // that flips the fallthrough must not silently succeed.
+        let prk = hkdf_extract(b"salt", b"ikm").unwrap();
+        assert_ne!(prk, [0u8; 32]);
     }
 
     #[test]

@@ -1,6 +1,10 @@
 [package]
 name = "privacysuite-ffi"
-version = "0.1.0"
+# Bumped to 0.2.0 when the Android AAR build infrastructure landed. The
+# crate's Rust surface is unchanged; the bump reflects the first published
+# AAR artifact (`privacysuite-ffi-0.2.0.aar`) so consumer apps can pin a
+# concrete version-tagged filename in `app/libs/`.
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.88"
 description = "UniFFI bindings for PrivacySuite Core SDK — Android/iOS/Desktop"
@@ -12,6 +16,18 @@ publish = false
 crate-type = ["lib", "cdylib"]
 name = "privacysuite_ffi"
 
+# Dedicated binary used by the Android AAR build pipeline to generate Kotlin
+# bindings from the compiled cdylib via `uniffi::uniffi_bindgen_main`.
+#
+# See `android/build-aar.sh`: this binary is invoked with
+#   `uniffi-bindgen generate --library target/<abi>/release/libprivacysuite_ffi.so
+#    --language kotlin --out-dir ./src/main/kotlin`
+# so the generated Kotlin is regenerated from the ABI actually shipped in the
+# AAR, never a stale hand-written checkpoint.
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
 [features]
 default = ["auth"]
 auth = ["privacysuite-core-sdk/auth"]
@@ -19,7 +35,10 @@ auth = ["privacysuite-core-sdk/auth"]
 [dependencies]
 # SECURITY: FFI boundary dependencies pinned to exact versions.
 privacysuite-core-sdk = { path = "..", default-features = false }
-uniffi = { version = "=0.31", default-features = false }
+# SECURITY: `cli` feature enables `uniffi_bindgen_main`, required by the
+# `uniffi-bindgen` binary above. Version stays pinned to `=0.31` to match
+# the procmacro scaffolding already used in `src/lib.rs`.
+uniffi = { version = "=0.31", default-features = false, features = ["cli"] }
 thiserror = "=2"
 
 [lints.clippy]

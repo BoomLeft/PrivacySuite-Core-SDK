@@ -1,0 +1,15 @@
+# UniFFI configuration for `privacysuite-ffi`.
+#
+# The generated Kotlin classes live under `com.boomleft.privacysuite` so
+# consumer apps (boomleft-voice, boomleft-scratchpad) can
+# `import com.boomleft.privacysuite.*` without caring about the Rust
+# crate name. The native library file shipped inside the AAR remains
+# `libprivacysuite_ffi.so` (matches the `[lib] name` in Cargo.toml).
+#
+# `cdylib_name` MUST match the compiled cdylib's basename so the runtime
+# call `System.loadLibrary("privacysuite_ffi")` emitted by the generated
+# bindings resolves correctly across all four Android ABIs.
+
+[bindings.kotlin]
+package_name = "com.boomleft.privacysuite"
+cdylib_name = "privacysuite_ffi"

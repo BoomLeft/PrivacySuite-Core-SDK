@@ -1,0 +1,16 @@
+# Gradle build outputs — AARs are produced on-demand via build-aar.sh.
+.gradle/
+build/
+ffi/build/
+
+# Generated artifacts produced by the Rust / UniFFI pipeline. These are
+# regenerated from source by build-aar.sh on every build and MUST NOT be
+# committed — committing would mask source/Rust drift against generated
+# Kotlin and cause silent-signature mismatches at runtime.
+ffi/src/main/jniLibs/
+ffi/src/main/kotlin/
+
+# Local Gradle / IDE metadata
+local.properties
+*.iml
+.idea/

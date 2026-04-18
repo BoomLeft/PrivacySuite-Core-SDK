@@ -136,6 +136,16 @@ strip = "symbols"
 panic = "abort"
 overflow-checks = true
 
+# Used by the privacysuite-ffi Android AAR build. uniffi-bindgen reads
+# UniFFI metadata symbols out of the .symtab section; the standard
+# release profile strips symbols for production-binary size, which
+# removes the metadata. This profile inherits every other hardening knob
+# from release but keeps symbols intact. The AAR build pipeline strips
+# the final .so files itself after uniffi-bindgen has run.
+[profile.release-ffi]
+inherits = "release"
+strip = "none"
+
 [profile.dev]
 overflow-checks = true
 debug = true

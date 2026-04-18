@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Minimal manifest for the privacysuite-ffi library AAR.
+
+  The library carries no permissions and declares no components: it
+  ships only compiled Rust (cdylib jniLibs) and UniFFI-generated Kotlin
+  glue. Consumer apps supply their own AndroidManifest.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />

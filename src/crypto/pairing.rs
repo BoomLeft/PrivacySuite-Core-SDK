@@ -246,6 +246,30 @@ pub fn verify(
         .map_err(|_| CryptoError::SignatureInvalid)
 }
 
+/// Verifies an Ed25519 signature from raw bytes.
+///
+/// Convenience wrapper around [`verify`] that accepts fixed-size byte
+/// arrays directly. This is the primary verification entry point for FFI
+/// callers (Kotlin/Swift/Dart), so they don't need to construct
+/// `ed25519_dalek` types themselves.
+///
+/// # Errors
+///
+/// - [`CryptoError::InvalidKey`] if `verifying_key` is not a valid Ed25519 point.
+/// - [`CryptoError::InvalidLength`] if `signature` is not a well-formed 64-byte encoding.
+/// - [`CryptoError::SignatureInvalid`] if verification fails.
+pub fn verify_raw(
+    verifying_key: &[u8; 32],
+    message: &[u8],
+    signature: &[u8; 64],
+) -> Result<(), CryptoError> {
+    let vk = ed25519_dalek::VerifyingKey::from_bytes(verifying_key)
+        .map_err(|_| CryptoError::InvalidKey)?;
+    let sig = ed25519_dalek::Signature::from_slice(signature)
+        .map_err(|_| CryptoError::InvalidLength)?;
+    verify(&vk, message, &sig)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,7 +279,6 @@ mod tests {
     #[test]
     fn ephemeral_keypair_generation() {
         let kp = EphemeralKeypair::generate();
-        // Public key should be 32 bytes and non-zero.
         assert_eq!(kp.public_key().as_bytes().len(), 32);
         assert_ne!(kp.public_key().as_bytes(), &[0u8; 32]);
     }
@@ -285,63 +308,42 @@ mod tests {
 
     #[test]
     fn rejects_low_order_public_keys() {
-        // Canonical low-order points of Curve25519 taken from the
-        // curve25519-dalek "EIGHT_TORSION" constants. Supplied as a peer's
-        // public key, each of these forces the raw X25519 output to the
-        // all-zero string regardless of our secret scalar — which would
-        // let the attacker predict the derived pairing key. The contributory
-        // check must reject them.
-        //
-        // Source: RFC 7748 §6.1 and
-        // https://github.com/dalek-cryptography/curve25519-dalek
         let low_order_points: [[u8; 32]; 7] = [
-            // Point at infinity / order 1.
             [0u8; 32],
-            // Order-2 point (u = p-1 mod p, with high bit unset by clamping).
             [
                 0xec, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
             ],
-            // Another order-2 representative.
             [
                 0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
             ],
-            // Order-4 representative.
             [
                 0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
             ],
-            // Order-8 representative A.
             [
                 0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae,
                 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f, 0xc4, 0x6a,
                 0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd,
                 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49, 0xb8, 0x00,
             ],
-            // Order-8 representative B.
             [
                 0x5f, 0x9c, 0x95, 0xbc, 0xa3, 0x50, 0x8c, 0x24,
                 0xb1, 0xd0, 0xb1, 0x55, 0x9c, 0x83, 0xef, 0x5b,
                 0x04, 0x44, 0x5c, 0xc4, 0x58, 0x1c, 0x8e, 0x86,
                 0xd8, 0x22, 0x4e, 0xdd, 0xd0, 0x9f, 0x11, 0x57,
             ],
-            // All-ones is not strictly low-order but is a classic malformed
-            // encoding that many defective implementations accept; we expect
-            // X25519's clamping + contributory check to still yield a
-            // non-zero shared secret here, so we don't require rejection.
-            // (Kept out of the assertion set below.)
             [0xff; 32],
         ];
 
         let alice = EphemeralKeypair::generate();
-        // Only the first 6 are guaranteed small-subgroup points.
         for point in &low_order_points[..6] {
             let malicious = PublicKey::from(*point);
             let result = compute_shared_secret(&alice, &malicious);
@@ -352,8 +354,6 @@ mod tests {
             );
         }
     }
-
-    // -- derive_pairing_key --
 
     #[test]
     fn derive_pairing_key_deterministic() {
@@ -401,8 +401,6 @@ mod tests {
         assert!(derive_pairing_key(&shared, invalid_utf8).is_err());
     }
 
-    // -- QR encode / decode --
-
     #[test]
     fn qr_round_trip() {
         let kp = EphemeralKeypair::generate();
@@ -424,12 +422,9 @@ mod tests {
         assert_eq!(result.err(), Some(CryptoError::InvalidLength));
     }
 
-    // -- Ed25519 signing --
-
     #[test]
     fn signing_keypair_generation() {
         let kp = SigningKeypair::generate();
-        // Verifying key should be 32 bytes.
         assert_eq!(kp.verifying_key().as_bytes().len(), 32);
     }
 
@@ -440,6 +435,28 @@ mod tests {
         let sig = sign(&kp, msg);
         let result = verify(&kp.verifying_key(), msg, &sig);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn verify_raw_round_trip() {
+        let kp = SigningKeypair::generate();
+        let msg = b"raw verify path";
+        let sig = sign(&kp, msg);
+        let vk_bytes = *kp.verifying_key().as_bytes();
+        let sig_bytes = sig.to_bytes();
+        assert!(verify_raw(&vk_bytes, msg, &sig_bytes).is_ok());
+    }
+
+    #[test]
+    fn verify_raw_rejects_tampered_message() {
+        let kp = SigningKeypair::generate();
+        let sig = sign(&kp, b"original");
+        let vk_bytes = *kp.verifying_key().as_bytes();
+        let sig_bytes = sig.to_bytes();
+        assert_eq!(
+            verify_raw(&vk_bytes, b"tampered", &sig_bytes),
+            Err(CryptoError::SignatureInvalid),
+        );
     }
 
     #[test]
@@ -466,11 +483,7 @@ mod tests {
         let msg = b"important data";
         let sig = sign(&kp, msg);
         let mut sig_bytes = sig.to_bytes();
-        // Flip a bit in the signature.
         sig_bytes[0] ^= 0xFF;
-        // Constructing from corrupted bytes may or may not succeed
-        // depending on whether the bytes are a valid encoding. If it
-        // does succeed, verification must fail.
         if let Ok(bad_sig) = ed25519_dalek::Signature::from_slice(&sig_bytes) {
             let result = verify(&kp.verifying_key(), msg, &bad_sig);
             assert_eq!(result, Err(CryptoError::SignatureInvalid));
@@ -490,24 +503,11 @@ mod tests {
         assert_eq!(sig1, sig2);
     }
 
-    // -- Debug doesn't leak --
-
     #[test]
     fn ephemeral_keypair_debug_does_not_leak() {
         let kp = EphemeralKeypair::generate();
         let dbg = format!("{kp:?}");
         assert!(dbg.contains("***"));
-        // Ensure no hex-encoded key bytes appear.
-        for byte in kp.public_key().as_bytes() {
-            let hex_upper = format!("{byte:02X}");
-            // Public key bytes could accidentally appear as substrings of
-            // "***" or "EphemeralKeypair" — only flag 2-char hex if it
-            // looks like raw key material (we check more than one byte).
-            if hex_upper != "00" && hex_upper != "EP" {
-                // No contiguous hex dump should be present.
-                let _ = hex_upper; // just ensuring the format is checked
-            }
-        }
         assert!(!dbg.contains('['));
     }
 
@@ -529,8 +529,6 @@ mod tests {
         assert!(!dbg.contains('['));
     }
 
-    // -- Edge cases --
-
     #[test]
     fn empty_message_sign_verify() {
         let kp = SigningKeypair::generate();
@@ -550,7 +548,6 @@ mod tests {
     fn qr_encode_is_valid_base64() {
         let kp = EphemeralKeypair::generate();
         let encoded = encode_pairing_qr(kp.public_key());
-        // Should decode without error.
         let decoded = BASE64.decode(&encoded).expect("must be valid base64");
         assert_eq!(decoded.len(), 32);
     }

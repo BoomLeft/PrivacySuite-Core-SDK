@@ -85,6 +85,24 @@ pub fn validate_url(input: &str) -> Result<ValidatedUrl, UrlError> {
         return Err(UrlError::InvalidHostCharacters);
     }
 
+    // 1b. Pre-scan for IPv6 zone-id suffix inside `[...]`. Newer `url`
+    //     crate releases reject `[fe80::1%eth0]` and `[fe80::1%25eth0]`
+    //     at parse time with the generic "invalid IPv6 address" error,
+    //     which callers shouldn't have to distinguish from bidi/CRLF
+    //     cases — both are "host contains something dangerous". Catch it
+    //     here so the error maps to `InvalidHostCharacters` regardless of
+    //     the `url` crate's version behaviour. Zone ids are only legal for
+    //     link-local endpoints and are never legitimate in user-supplied
+    //     URLs from the open internet.
+    if let Some(open) = input.find('[') {
+        if let Some(close_rel) = input[open + 1..].find(']') {
+            let inside = &input[open + 1..open + 1 + close_rel];
+            if inside.contains('%') {
+                return Err(UrlError::InvalidHostCharacters);
+            }
+        }
+    }
+
     // 2. Parse. The `url` crate refuses many of the malformed shapes
     //    outright but happily accepts things like `http://0x7f.0.0.1/`
     //    (valid host under WHATWG), so we still need the custom checks

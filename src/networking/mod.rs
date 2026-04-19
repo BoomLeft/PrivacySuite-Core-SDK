@@ -464,7 +464,7 @@ impl TorClient {
 /// Opaque error string returned for any failure in [`TorClient::connect`].
 ///
 /// See the security note on that method for the rationale.
-pub const TOR_CONNECT_ERR_MSG: &str = "Tor SOCKS5 connection failed";
+pub const TOR_CONNECT_ERR_MSG: &str = "Tor connection failed";
 
 impl Default for TorClient {
     fn default() -> Self {

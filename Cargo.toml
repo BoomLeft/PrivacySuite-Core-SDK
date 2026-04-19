@@ -4,7 +4,11 @@ resolver = "2"
 
 [package]
 name = "privacysuite-core-sdk"
-version = "0.1.0"
+# Crate version tracks the git tag cut from each release. Mirrors the FFI
+# crate's versioning posture (see `privacysuite-ffi/Cargo.toml`). The git
+# tag (e.g. `v0.4.0`) is the actual pin mechanism — apps consume via
+# `{ git = "...", tag = "v0.4.0" }` rather than crates.io.
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.88"
 description = "Zero-knowledge cryptographic foundation for BoomLeft applications"

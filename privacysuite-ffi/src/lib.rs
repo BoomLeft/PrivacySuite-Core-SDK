@@ -105,6 +105,31 @@ pub enum PrivacySuiteError {
     /// URL host is an obfuscated IP encoding.
     #[error("URL host is an obfuscated IP encoding")]
     UrlObfuscatedIpEncoding,
+    // ── Media sanitiser + dimension gate (G4) ──────────────────────
+    //
+    // Distinct variants rather than a single `ImageInvalid` so Kotlin /
+    // Swift callers can surface a precise reason (show-the-user-a-
+    // "supported-format" list vs. "this-image-is-too-big" vs. "this-
+    // image-looks-hostile") without string-matching the `Display`
+    // output.
+    /// Image format is not one of JPEG / PNG / WebP / GIF / HEIF / AVIF / TIFF.
+    #[error("unsupported image format")]
+    ImageUnsupportedFormat,
+    /// Image input exceeds the sanitiser's 200 MiB size cap.
+    #[error("image exceeds sanitiser size cap")]
+    ImageTooLarge,
+    /// Image header was malformed or a structural parse failed.
+    #[error("malformed image")]
+    ImageMalformed,
+    /// Header-declared dimensions exceed the 20 000 px per-axis cap.
+    #[error("image dimensions exceed per-axis cap")]
+    ImageDimensionsTooLarge,
+    /// Header-declared pixel budget exceeds 400 M pixels of decompressed RGBA.
+    #[error("image is a suspected decompression bomb")]
+    ImageDecompressionBomb,
+    /// Parsing the image header overflowed a size computation.
+    #[error("image parse arithmetic overflowed")]
+    ImageIntegerOverflow,
 }
 
 impl From<CryptoError> for PrivacySuiteError {
@@ -129,6 +154,29 @@ impl From<CryptoError> for PrivacySuiteError {
             | CryptoError::StreamInvalidHeader
             | CryptoError::StreamChunkIndexMismatch => Self::Decryption,
             CryptoError::StreamAlreadyFinalized => Self::Encryption,
+        }
+    }
+}
+
+impl From<privacysuite_core_sdk::crypto::media::SanitizeError> for PrivacySuiteError {
+    fn from(e: privacysuite_core_sdk::crypto::media::SanitizeError) -> Self {
+        use privacysuite_core_sdk::crypto::media::SanitizeError as S;
+        match e {
+            S::Malformed => Self::ImageMalformed,
+            S::TooLarge => Self::ImageTooLarge,
+            S::UnsupportedFormat(_) => Self::ImageUnsupportedFormat,
+            S::IntegerOverflow => Self::ImageIntegerOverflow,
+        }
+    }
+}
+
+impl From<privacysuite_core_sdk::crypto::media::DimensionError> for PrivacySuiteError {
+    fn from(e: privacysuite_core_sdk::crypto::media::DimensionError) -> Self {
+        use privacysuite_core_sdk::crypto::media::DimensionError as D;
+        match e {
+            D::TooLarge { .. } => Self::ImageDimensionsTooLarge,
+            D::DecompressionBomb { .. } => Self::ImageDecompressionBomb,
+            D::Malformed => Self::ImageMalformed,
         }
     }
 }
@@ -587,6 +635,98 @@ pub fn login_finish(
 pub fn validate_url(input: String) -> Result<String, PrivacySuiteError> {
     let validated = privacysuite_core_sdk::privacy_utils::url::validate_url(&input)?;
     Ok(validated.as_str().to_owned())
+}
+
+// ---------------------------------------------------------------------------
+// G4: image metadata stripping + decompression-bomb defense
+// ---------------------------------------------------------------------------
+//
+// Both entry points are pure byte-in / byte-out. They intentionally take
+// `Vec<u8>` (copied across the FFI boundary) rather than an opaque handle
+// — the Kotlin / Swift caller already has the bytes in a language-native
+// `ByteArray` / `Data` and wrapping them in a handle buys nothing. The
+// returned `Vec<u8>` is likewise copied, giving the foreign runtime
+// ownership of its own buffer to dispose of as it pleases.
+
+/// Header-derived dimensions + decompressed-size estimate for an image.
+///
+/// The corresponding Rust type is
+/// `privacysuite_core_sdk::crypto::media::DimensionInfo`. Shape is
+/// duplicated here rather than re-used via a `derive(uniffi::Record)` on
+/// the core struct because the core crate deliberately does not depend on
+/// `uniffi` — the FFI layer stays a thin one-way translator.
+#[derive(uniffi::Record)]
+pub struct ImageDimensions {
+    /// Declared width in pixels.
+    pub width: u32,
+    /// Declared height in pixels.
+    pub height: u32,
+    /// Bits per decoded pixel (8/16/24/32/48/64 depending on format +
+    /// header). Used for the decompression-bomb budget check.
+    pub bits_per_pixel: u8,
+    /// Declared frame count. 1 for still images; >1 for animated GIF /
+    /// APNG / animated WebP / AVIF image sequences.
+    pub frame_count: u32,
+    /// Estimated uncompressed bytes: width * height * (bits_per_pixel/8) *
+    /// frame_count. Reported back for callers that want to reason about
+    /// memory pressure without re-running the walker.
+    pub estimated_bytes: u64,
+}
+
+impl From<privacysuite_core_sdk::crypto::media::DimensionInfo> for ImageDimensions {
+    fn from(d: privacysuite_core_sdk::crypto::media::DimensionInfo) -> Self {
+        Self {
+            width: d.width,
+            height: d.height,
+            bits_per_pixel: d.bits_per_pixel,
+            frame_count: d.frame_count,
+            estimated_bytes: d.estimated_bytes,
+        }
+    }
+}
+
+/// Strip all EXIF / XMP / IPTC / ICC / vendor metadata from an image.
+///
+/// Auto-detects format from the magic bytes (no trust in a MIME hint) and
+/// returns a fresh byte array with metadata removed. Pixel data passes
+/// through byte-for-byte — the sanitiser never invokes libheif / libavif /
+/// libtiff.
+///
+/// # Errors
+///
+/// Returns:
+/// * [`PrivacySuiteError::ImageUnsupportedFormat`] — magic bytes don't match
+///   a supported format.
+/// * [`PrivacySuiteError::ImageTooLarge`] — input exceeds 200 MiB.
+/// * [`PrivacySuiteError::ImageMalformed`] — structural parse failure, or
+///   a paranoid post-strip check found metadata markers that should have
+///   been removed.
+/// * [`PrivacySuiteError::ImageIntegerOverflow`] — an offset/length
+///   computation overflowed while walking the container.
+#[uniffi::export]
+pub fn strip_image_metadata(bytes: Vec<u8>) -> Result<Vec<u8>, PrivacySuiteError> {
+    Ok(privacysuite_core_sdk::crypto::media::strip_metadata(&bytes)?)
+}
+
+/// Inspect an image header and return declared dimensions, rejecting
+/// anything that exceeds the per-axis cap (20 000 px) or the aggregate
+/// pixel-budget (400 M pixels / 1.6 GiB of RGBA). Does NOT decode pixels.
+///
+/// # Errors
+///
+/// Returns:
+/// * [`PrivacySuiteError::ImageDimensionsTooLarge`] — either axis exceeds
+///   the 20 000 px cap.
+/// * [`PrivacySuiteError::ImageDecompressionBomb`] — aggregate estimate
+///   exceeds the 1.6 GiB budget.
+/// * [`PrivacySuiteError::ImageMalformed`] — header is truncated, magic
+///   bytes don't match, or the walker could not parse the format.
+#[uniffi::export]
+pub fn inspect_image_dimensions(
+    bytes: Vec<u8>,
+) -> Result<ImageDimensions, PrivacySuiteError> {
+    let info = privacysuite_core_sdk::crypto::media::inspect_dimensions(&bytes)?;
+    Ok(info.into())
 }
 
 // ---------------------------------------------------------------------------

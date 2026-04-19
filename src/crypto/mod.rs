@@ -8,6 +8,8 @@
 //! - **[`mnemonic`]** — BIP39 24-word recovery phrase generation and recovery.
 //! - **[`pairing`]** — X25519 device pairing, BLAKE3 key derivation, Ed25519 signing.
 //! - **[`pinning`]** — TLS certificate pinning (SHA-256 SPKI verification).
+//! - **[`media`]** — Image metadata stripping + decompression-bomb defense
+//!   (byte-in / byte-out; no codec invocation).
 //!
 //! # Example
 //!
@@ -37,6 +39,7 @@ pub mod hash;
 pub mod hkdf;
 pub mod kdf;
 pub mod keys;
+pub mod media;
 pub mod mnemonic;
 pub mod pairing;
 pub mod pinning;

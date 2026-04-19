@@ -31,6 +31,12 @@ path = "src/bin/uniffi-bindgen.rs"
 [features]
 default = ["auth"]
 auth = ["privacysuite-core-sdk/auth"]
+# G7: surfaces `BackgroundSyncHost` (UniFFI callback interface) and
+# `BackgroundSyncClient` for consumer apps that need a platform-agnostic
+# scheduling abstraction. The core SDK's `sync` feature is pulled in for
+# the schema types; no WebSocket / relay code is added to the FFI surface
+# (those stay Rust-only for now).
+sync = ["privacysuite-core-sdk/sync"]
 
 [dependencies]
 # SECURITY: FFI boundary dependencies pinned to exact versions.

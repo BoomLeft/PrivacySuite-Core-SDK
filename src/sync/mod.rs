@@ -56,6 +56,22 @@
 //! This layout gives v3+ a clean upgrade path: bumping
 //! [`SYNC_VERSION_V2`] is a one-site change, and older clients surface
 //! a clear typed error rather than silently failing an AEAD tag verify.
+//!
+//! # Background scheduling (G7)
+//!
+//! Wire-level sync is only half of the story — consumer apps also need a
+//! way to schedule *periodic* sync work (e.g. "refresh feeds every
+//! 30 minutes on unmetered Wi-Fi, not when battery is low"). That lives
+//! in the [`background`] submodule: a platform-agnostic trait
+//! ([`background::BackgroundSyncHost`]) plus SDK-owned schema types
+//! ([`background::SyncJob`], [`background::SyncConstraints`],
+//! [`background::BackoffPolicy`]) that every consumer app converges on.
+//! The SDK intentionally does not bind Android's `WorkManager` directly;
+//! consumer apps implement the trait on top of whichever platform
+//! scheduler is natively appropriate. See the [`background`] module
+//! docs for the rationale.
+
+pub mod background;
 
 use std::fmt;
 

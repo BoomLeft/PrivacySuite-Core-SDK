@@ -148,3 +148,140 @@ builds.
 `cargo ndk` skips ABIs whose Rust targets aren't installed. Re-run
 `rustup target add …` for the missing ABIs (build-aar.sh does this
 automatically, but only if `rustup` is available).
+
+## Reference — implementing `BackgroundSyncHostFfi` on Android (G7)
+
+The SDK ships a platform-agnostic background-sync scheduling abstraction
+(`privacysuite_core_sdk::sync::background::BackgroundSyncHost`, exposed
+to Kotlin/Swift via the UniFFI callback interface `BackgroundSyncHostFfi`
+in `privacysuite-ffi`). The SDK deliberately does NOT ship a reference
+`WorkManager` host inside this AAR — consumer apps (Podcasts, Weather,
+Music) each already have their own `WorkManager` wrapper with app-
+specific worker classes, and forcing a `androidx.work:work-runtime-ktx`
+dependency onto every consumer would be wasteful.
+
+Instead, each consumer app should implement `BackgroundSyncHostFfi`
+in its own codebase. A minimal reference implementation follows — copy
+into your app and adapt as needed (the concrete `Worker` subclass should
+live in your app because it knows which of your domain-specific sync
+jobs to kick off):
+
+```kotlin
+// app/src/main/java/com/example/sync/WorkManagerBackgroundSyncHost.kt
+package com.example.sync
+
+import androidx.work.BackoffPolicy
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
+import com.boomleft.privacysuite.BackgroundSyncFfiError
+import com.boomleft.privacysuite.BackgroundSyncHostFfi
+import com.boomleft.privacysuite.BackoffPolicyFfi
+import com.boomleft.privacysuite.SyncConstraintsFfi
+import com.boomleft.privacysuite.SyncJobFfi
+import java.util.concurrent.TimeUnit
+
+class WorkManagerBackgroundSyncHost(
+    private val workManager: WorkManager,
+    /** Maps a caller-chosen `job_id` to the Worker class the app wants to run. */
+    private val workerResolver: (jobId: String) -> Class<out androidx.work.ListenableWorker>,
+) : BackgroundSyncHostFfi {
+
+    override fun schedule(job: SyncJobFfi) {
+        val constraints = job.constraints.toWorkManager()
+        val workerClass = workerResolver(job.jobId)
+
+        if (job.intervalSecs == 0u) {
+            // One-shot
+            val request = OneTimeWorkRequestBuilder<androidx.work.ListenableWorker>()
+                .setConstraints(constraints)
+                .setBackoffCriteria(
+                    job.backoffPolicy.toAndroidxPolicy(),
+                    job.backoffPolicy.initialSecs().toLong(),
+                    TimeUnit.SECONDS,
+                )
+                .build()
+            workManager.enqueueUniqueWork(
+                job.jobId,
+                ExistingWorkPolicy.REPLACE,
+                request,
+            )
+        } else {
+            // Periodic. WorkManager enforces a 15-minute minimum; values below
+            // that are silently raised. If that matters, return a
+            // `PolicyRejected` error instead of silently accepting.
+            val request = PeriodicWorkRequestBuilder<androidx.work.ListenableWorker>(
+                repeatInterval = job.intervalSecs.toLong(),
+                repeatIntervalTimeUnit = TimeUnit.SECONDS,
+            )
+                .setConstraints(constraints)
+                .setBackoffCriteria(
+                    job.backoffPolicy.toAndroidxPolicy(),
+                    job.backoffPolicy.initialSecs().toLong(),
+                    TimeUnit.SECONDS,
+                )
+                .build()
+            workManager.enqueueUniquePeriodicWork(
+                job.jobId,
+                ExistingPeriodicWorkPolicy.UPDATE,
+                request,
+            )
+        }
+    }
+
+    override fun cancel(jobId: String) {
+        workManager.cancelUniqueWork(jobId)
+    }
+
+    override fun isScheduled(jobId: String): Boolean {
+        val infos = workManager.getWorkInfosForUniqueWork(jobId).get()
+        return infos.any { it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.RUNNING }
+    }
+
+    private fun SyncConstraintsFfi.toWorkManager(): Constraints {
+        val network = when {
+            unmeteredNetwork -> NetworkType.UNMETERED
+            networkRequired -> NetworkType.CONNECTED
+            else -> NetworkType.NOT_REQUIRED
+        }
+        return Constraints.Builder()
+            .setRequiredNetworkType(network)
+            .setRequiresCharging(chargingRequired)
+            .setRequiresBatteryNotLow(batteryNotLow)
+            .setRequiresDeviceIdle(deviceIdle)
+            .build()
+    }
+
+    private fun BackoffPolicyFfi.toAndroidxPolicy(): BackoffPolicy = when (this) {
+        is BackoffPolicyFfi.Linear -> BackoffPolicy.LINEAR
+        is BackoffPolicyFfi.Exponential -> BackoffPolicy.EXPONENTIAL
+    }
+
+    private fun BackoffPolicyFfi.initialSecs(): UInt = when (this) {
+        is BackoffPolicyFfi.Linear -> initialSecs
+        is BackoffPolicyFfi.Exponential -> initialSecs
+    }
+}
+```
+
+Gradle dependency required in the consumer app (not in this AAR):
+
+```kotlin
+// app/build.gradle.kts
+dependencies {
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
+}
+```
+
+Why not ship this inside the AAR? Pulling `androidx.work:work-runtime-ktx`
+into `privacysuite-ffi.aar` would force WorkManager onto every consumer
+(including apps that use `JobScheduler`, `AlarmManager`, or have stripped
+`android.permission.WAKE_LOCK` in their manifest). Keeping the host impl
+in each app preserves that flexibility while the SDK-owned schema
+(`SyncJobFfi`, `SyncConstraintsFfi`, `BackoffPolicyFfi`) unifies the
+vocabulary.

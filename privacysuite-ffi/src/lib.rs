@@ -643,3 +643,315 @@ pub fn validate_url(input: String) -> Result<String, PrivacySuiteError> {
 //
 // See `networking::privacy_client` in the core crate for the authoritative
 // Rust-side API and behaviour.
+
+// ---------------------------------------------------------------------------
+// G7: BackgroundSync (trait + client, UniFFI callback interface)
+// ---------------------------------------------------------------------------
+//
+// Exposes the core-SDK `sync::background` module to Kotlin/Swift consumers.
+//
+// Design:
+//
+//  * `BackgroundSyncHostFfi` is a UniFFI callback interface. The FOREIGN
+//    language implements it (Kotlin `class WorkManagerBackgroundSyncHost
+//    : BackgroundSyncHost`); the Rust side receives a
+//    `Box<dyn BackgroundSyncHostFfi>` when the binding calls back into
+//    native code. We wrap that in an `Arc` and hand it to
+//    `BackgroundSyncClient::new`.
+//
+//  * The UniFFI-facing types (`SyncJobFfi`, `SyncConstraintsFfi`,
+//    `BackoffPolicyFfi`, `BackgroundSyncFfiError`) are mirrors of the
+//    core-SDK types. We intentionally don't `#[uniffi::export]` the core
+//    types directly because the core crate doesn't (and shouldn't) depend
+//    on UniFFI — keeping the bindings in the FFI shim preserves the
+//    pure-Rust core graph.
+//
+//  * `BackgroundSyncClientHandle` is the UniFFI `Object` that Kotlin/Swift
+//    callers actually hold. Its methods delegate to the inner
+//    `privacysuite_core_sdk::sync::background::BackgroundSyncClient`.
+//
+// UniFFI 0.31 note: `#[uniffi::export(callback_interface)]` emits the
+// metadata needed for Kotlin's callback-interface codegen and the
+// `Box<dyn Trait>` lift/lower path on the Rust side. Callback-interface
+// traits cannot themselves return non-`Send + Sync` types or reference
+// non-FFI types, so the trait signatures below use `Vec<u8>` / `String`
+// / primitives throughout — the translation from core-SDK types happens
+// at the client boundary, not inside the trait.
+
+#[cfg(feature = "sync")]
+use privacysuite_core_sdk::sync::background as core_bg;
+
+/// FFI error type for background-sync operations.
+///
+/// Separated from [`PrivacySuiteError`] so Kotlin callers can pattern
+/// match on scheduling-specific failure modes without having to filter
+/// crypto / URL / auth variants they never produced.
+#[cfg(feature = "sync")]
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+pub enum BackgroundSyncFfiError {
+    /// The host platform does not support background scheduling.
+    #[error("background sync not supported on this platform")]
+    NotSupported,
+    /// The host rejected the job because it violated a platform or
+    /// policy rule.
+    #[error("background sync policy rejected: {reason}")]
+    PolicyRejected {
+        /// Human-readable rejection reason. Safe to log.
+        reason: String,
+    },
+    /// A platform-level error surfaced from the native scheduler.
+    #[error("background sync platform error: {message}")]
+    Platform {
+        /// Native scheduler diagnostic. Safe to log.
+        message: String,
+    },
+}
+
+#[cfg(feature = "sync")]
+impl From<core_bg::BackgroundSyncError> for BackgroundSyncFfiError {
+    fn from(e: core_bg::BackgroundSyncError) -> Self {
+        match e {
+            core_bg::BackgroundSyncError::NotSupported => Self::NotSupported,
+            core_bg::BackgroundSyncError::PolicyRejected(reason) => Self::PolicyRejected { reason },
+            core_bg::BackgroundSyncError::Platform(message) => Self::Platform { message },
+        }
+    }
+}
+
+#[cfg(feature = "sync")]
+impl From<BackgroundSyncFfiError> for core_bg::BackgroundSyncError {
+    fn from(e: BackgroundSyncFfiError) -> Self {
+        match e {
+            BackgroundSyncFfiError::NotSupported => Self::NotSupported,
+            BackgroundSyncFfiError::PolicyRejected { reason } => Self::PolicyRejected(reason),
+            BackgroundSyncFfiError::Platform { message } => Self::Platform(message),
+        }
+    }
+}
+
+/// Retry-backoff policy (UniFFI mirror of `core_bg::BackoffPolicy`).
+#[cfg(feature = "sync")]
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum BackoffPolicyFfi {
+    /// Linear backoff: retry delay = `initial_secs * attempt_count`.
+    Linear {
+        /// Base delay in seconds.
+        initial_secs: u32,
+    },
+    /// Exponential backoff: retry delay = `initial_secs * 2^attempt_count`.
+    Exponential {
+        /// Base delay in seconds.
+        initial_secs: u32,
+    },
+}
+
+#[cfg(feature = "sync")]
+impl From<BackoffPolicyFfi> for core_bg::BackoffPolicy {
+    fn from(p: BackoffPolicyFfi) -> Self {
+        match p {
+            BackoffPolicyFfi::Linear { initial_secs } => Self::Linear { initial_secs },
+            BackoffPolicyFfi::Exponential { initial_secs } => Self::Exponential { initial_secs },
+        }
+    }
+}
+
+#[cfg(feature = "sync")]
+impl From<core_bg::BackoffPolicy> for BackoffPolicyFfi {
+    fn from(p: core_bg::BackoffPolicy) -> Self {
+        match p {
+            core_bg::BackoffPolicy::Linear { initial_secs } => Self::Linear { initial_secs },
+            core_bg::BackoffPolicy::Exponential { initial_secs } => Self::Exponential { initial_secs },
+        }
+    }
+}
+
+/// Device-state constraint set (UniFFI mirror of `core_bg::SyncConstraints`).
+#[cfg(feature = "sync")]
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SyncConstraintsFfi {
+    /// Job requires a network connection of any kind.
+    pub network_required: bool,
+    /// Job requires an unmetered network (Wi-Fi style).
+    pub unmetered_network: bool,
+    /// Job only runs while the device is charging.
+    pub charging_required: bool,
+    /// Job only runs when the battery is not low.
+    pub battery_not_low: bool,
+    /// Job only runs when the device is idle.
+    pub device_idle: bool,
+}
+
+#[cfg(feature = "sync")]
+impl From<SyncConstraintsFfi> for core_bg::SyncConstraints {
+    fn from(c: SyncConstraintsFfi) -> Self {
+        Self {
+            network_required: c.network_required,
+            unmetered_network: c.unmetered_network,
+            charging_required: c.charging_required,
+            battery_not_low: c.battery_not_low,
+            device_idle: c.device_idle,
+        }
+    }
+}
+
+#[cfg(feature = "sync")]
+impl From<core_bg::SyncConstraints> for SyncConstraintsFfi {
+    fn from(c: core_bg::SyncConstraints) -> Self {
+        Self {
+            network_required: c.network_required,
+            unmetered_network: c.unmetered_network,
+            charging_required: c.charging_required,
+            battery_not_low: c.battery_not_low,
+            device_idle: c.device_idle,
+        }
+    }
+}
+
+/// A single unit of scheduled work (UniFFI mirror of `core_bg::SyncJob`).
+#[cfg(feature = "sync")]
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SyncJobFfi {
+    /// Caller-chosen stable identifier.
+    pub job_id: String,
+    /// Device-state constraints.
+    pub constraints: SyncConstraintsFfi,
+    /// Minimum repeat interval in seconds; 0 means one-shot.
+    pub interval_secs: u32,
+    /// Retry-backoff policy.
+    pub backoff_policy: BackoffPolicyFfi,
+}
+
+#[cfg(feature = "sync")]
+impl From<SyncJobFfi> for core_bg::SyncJob {
+    fn from(j: SyncJobFfi) -> Self {
+        Self {
+            job_id: j.job_id,
+            constraints: j.constraints.into(),
+            interval_secs: j.interval_secs,
+            backoff_policy: j.backoff_policy.into(),
+        }
+    }
+}
+
+#[cfg(feature = "sync")]
+impl From<core_bg::SyncJob> for SyncJobFfi {
+    fn from(j: core_bg::SyncJob) -> Self {
+        Self {
+            job_id: j.job_id,
+            constraints: j.constraints.into(),
+            interval_secs: j.interval_secs,
+            backoff_policy: j.backoff_policy.into(),
+        }
+    }
+}
+
+/// UniFFI callback interface — implemented on the foreign side.
+///
+/// Kotlin example:
+///
+/// ```kotlin
+/// class WorkManagerBackgroundSyncHost(
+///     private val workManager: WorkManager,
+/// ) : BackgroundSyncHostFfi {
+///     override fun schedule(job: SyncJobFfi) { /* … */ }
+///     override fun cancel(jobId: String) { /* … */ }
+///     override fun isScheduled(jobId: String): Boolean { /* … */ }
+/// }
+/// ```
+///
+/// All methods are synchronous on the FFI boundary; platform schedulers
+/// are free to defer the actual work inside their implementation.
+#[cfg(feature = "sync")]
+#[uniffi::export(callback_interface)]
+pub trait BackgroundSyncHostFfi: Send + Sync {
+    /// Register (or re-register) a job with the platform scheduler.
+    fn schedule(&self, job: SyncJobFfi) -> Result<(), BackgroundSyncFfiError>;
+    /// Cancel the job registered under `job_id`, if any.
+    fn cancel(&self, job_id: String) -> Result<(), BackgroundSyncFfiError>;
+    /// Returns `true` if a job with the given id is scheduled.
+    fn is_scheduled(&self, job_id: String) -> Result<bool, BackgroundSyncFfiError>;
+}
+
+/// Rust-side adapter that lets a `BackgroundSyncHostFfi` (Kotlin impl)
+/// stand in as a `core_bg::BackgroundSyncHost`.
+#[cfg(feature = "sync")]
+struct CallbackBackgroundSyncHost {
+    inner: Box<dyn BackgroundSyncHostFfi>,
+}
+
+#[cfg(feature = "sync")]
+impl std::fmt::Debug for CallbackBackgroundSyncHost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CallbackBackgroundSyncHost").finish()
+    }
+}
+
+#[cfg(feature = "sync")]
+impl core_bg::BackgroundSyncHost for CallbackBackgroundSyncHost {
+    fn schedule(&self, job: core_bg::SyncJob) -> Result<(), core_bg::BackgroundSyncError> {
+        self.inner
+            .schedule(job.into())
+            .map_err(core_bg::BackgroundSyncError::from)
+    }
+    fn cancel(&self, job_id: String) -> Result<(), core_bg::BackgroundSyncError> {
+        self.inner
+            .cancel(job_id)
+            .map_err(core_bg::BackgroundSyncError::from)
+    }
+    fn is_scheduled(&self, job_id: String) -> Result<bool, core_bg::BackgroundSyncError> {
+        self.inner
+            .is_scheduled(job_id)
+            .map_err(core_bg::BackgroundSyncError::from)
+    }
+}
+
+/// Thin UniFFI handle wrapping `core_bg::BackgroundSyncClient`.
+///
+/// Kotlin callers construct this by passing their `BackgroundSyncHostFfi`
+/// implementation to [`BackgroundSyncClientHandle::new`], then call
+/// [`schedule`](Self::schedule), [`cancel`](Self::cancel), and
+/// [`is_scheduled`](Self::is_scheduled) as needed.
+#[cfg(feature = "sync")]
+#[derive(uniffi::Object)]
+pub struct BackgroundSyncClientHandle {
+    inner: core_bg::BackgroundSyncClient,
+}
+
+#[cfg(feature = "sync")]
+#[uniffi::export]
+impl BackgroundSyncClientHandle {
+    /// Construct a new client wrapping the provided host.
+    ///
+    /// The host typically wraps the platform scheduler
+    /// (`androidx.work.WorkManager` on Android, `BGTaskScheduler` on
+    /// iOS, a timer thread on desktop).
+    #[uniffi::constructor]
+    pub fn new(host: Box<dyn BackgroundSyncHostFfi>) -> Arc<Self> {
+        let adapter: Arc<dyn core_bg::BackgroundSyncHost> =
+            Arc::new(CallbackBackgroundSyncHost { inner: host });
+        Arc::new(Self {
+            inner: core_bg::BackgroundSyncClient::new(adapter),
+        })
+    }
+
+    /// Register (or re-register) `job` with the underlying host.
+    pub fn schedule(&self, job: SyncJobFfi) -> Result<(), BackgroundSyncFfiError> {
+        self.inner
+            .schedule(job.into())
+            .map_err(BackgroundSyncFfiError::from)
+    }
+
+    /// Cancel the job registered under `job_id`, if any.
+    pub fn cancel(&self, job_id: String) -> Result<(), BackgroundSyncFfiError> {
+        self.inner
+            .cancel(&job_id)
+            .map_err(BackgroundSyncFfiError::from)
+    }
+
+    /// Returns `true` if a job is currently registered under `job_id`.
+    pub fn is_scheduled(&self, job_id: String) -> Result<bool, BackgroundSyncFfiError> {
+        self.inner
+            .is_scheduled(&job_id)
+            .map_err(BackgroundSyncFfiError::from)
+    }
+}

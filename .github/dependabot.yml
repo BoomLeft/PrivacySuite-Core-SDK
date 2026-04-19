@@ -1,0 +1,23 @@
+# Dependabot keeps cargo + GitHub Actions deps current. Weekly cadence
+# matches a single-contributor rhythm — not so noisy that PRs pile up,
+# still catches security patches within a week of release.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3

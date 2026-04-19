@@ -37,7 +37,14 @@ ohttp = ["networking", "dep:async-trait"]
 # primitives (DoH, OHTTP trait, TorClient) don't drag in an HTTP
 # client stack. See `networking::privacy_client`.
 http = ["networking", "ohttp", "dep:reqwest", "dep:futures-util"]
-full = ["auth", "storage", "sync", "networking", "ohttp", "http"]
+# Android Keystore / StrongBox wrapper around `VaultKey` (G5). Pulls in
+# the `jni` and `ndk-context` crates used for the JNI bridge. The
+# `keystore::android` implementation is `#[cfg(target_os = "android")]`-
+# gated, so enabling this feature on a non-Android host exposes only the
+# stub types (every entry point returns `KeystoreError::NotAvailable`).
+# See `keystore::android`.
+keystore = ["dep:jni", "dep:ndk-context"]
+full = ["auth", "storage", "sync", "networking", "ohttp", "http", "keystore"]
 
 [dependencies]
 # --- Crypto primitives (always available) ---
@@ -137,6 +144,17 @@ reqwest = { version = "=0.12.28", default-features = false, features = [
     "http2",
 ], optional = true }
 
+# --- Android Keystore wrapper (optional: "keystore" feature, Android-only) ---
+# SECURITY: These deps are only *used* on `target_os = "android"` — the
+# `keystore::android` module is `cfg`-gated. Leaving them as unconditional
+# optional deps (rather than `[target.'cfg(target_os = "android")']`-scoped)
+# means host `cargo check --all-features` still compiles and exercises the
+# stub path without ever instantiating a JNI call. Exact-version pinning
+# matches the rest of the crate's supply-chain posture; the versions are
+# aligned with Blackout's vetted `SecureSecretStore` bridge.
+jni = { version = "=0.21", optional = true }
+ndk-context = { version = "=0.1", optional = true }
+
 [dev-dependencies]
 # SECURITY: Dev dependencies also pinned to prevent test environment drift.
 tempfile = "=3"
@@ -145,8 +163,15 @@ serde = { version = "=1", features = ["derive"] }
 serde_json = "=1"
 hex = "=0.4"
 
+# SECURITY: `unsafe_code` is configured at *deny* rather than *forbid* so
+# one specific site — the Android JNI bridge in `keystore::android` —
+# can opt in via `#[allow(unsafe_code)]`. Every other module remains
+# 100 % safe Rust; `grep -r "allow(unsafe_code)" src/` should only ever
+# surface that single Android Keystore site. The bridge's `unsafe` is
+# limited to adopting the raw `JavaVM*` pointer supplied by the NDK at
+# process start — see the SAFETY comment in `keystore::android`.
 [lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 missing_docs = "deny"
 missing_debug_implementations = "deny"
 unreachable_pub = "deny"

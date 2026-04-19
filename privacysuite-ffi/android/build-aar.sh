@@ -109,6 +109,10 @@ mkdir -p "${JNI_LIBS_DIR}"
 
 (
     cd "${SDK_ROOT}"
+    # `--features keystore` opts the AAR into the Android Keystore /
+    # StrongBox wrapping helpers (G5). On non-Android hosts the feature
+    # is a no-op (stub types), but we build only for Android ABIs here
+    # so the full JNI-backed code path compiles in.
     cargo ndk \
         -t arm64-v8a \
         -t armeabi-v7a \
@@ -117,6 +121,7 @@ mkdir -p "${JNI_LIBS_DIR}"
         -o "${JNI_LIBS_DIR}" \
         build --profile release-ffi \
         -p privacysuite-ffi \
+        --features keystore \
         --manifest-path "${SDK_ROOT}/Cargo.toml"
 )
 

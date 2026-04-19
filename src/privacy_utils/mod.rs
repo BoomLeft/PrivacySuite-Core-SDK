@@ -1,33 +1,34 @@
 //! Privacy utilities for URL sanitization and tracking prevention.
 //!
-//! Unified tracking parameter stripping across all BoomLeft applications.
-//! Blocklist is compiled-in (not fetched remotely) so sanitisation works offline
-//! and cannot be disabled by network attackers.
+//! Unified URL hygiene across all BoomLeft applications. Blocklist is
+//! compiled-in (not fetched remotely) so sanitisation works offline and
+//! cannot be disabled by network attackers.
 //!
-//! # Tier choice
+//! # API surface
 //!
-//! The stripping API comes in two flavours:
-//!
-//! - [`strip_tracking_params`] / [`TRACKING_PARAMS`] — the **conservative
-//!   default**. Only parameters whose names are overwhelmingly used for
-//!   tracking (UTM, vendor click IDs, analytics session IDs, etc.). Very
-//!   low false-positive rate.
+//! - [`strip_tracking_params`] / [`TRACKING_PARAMS`] — conservative
+//!   tracking-parameter stripper. Only parameters whose names are
+//!   overwhelmingly used for tracking (UTM, vendor click IDs, analytics
+//!   session IDs). Very low false-positive rate.
 //! - [`strip_tracking_params_aggressive`] / [`TRACKING_PARAMS_AGGRESSIVE`]
-//!   — an opt-in strict list that also removes extremely generic names
+//!   — opt-in strict list that also removes extremely generic names
 //!   (`ref`, `source`, `ts`, `cid`, `rid`, `ct`, `random_id`,
-//!   `pingback_id`) frequently used for legitimate application
-//!   signalling (git refs, HMAC-signed URL timestamps, SPA route
-//!   parameters, etc.). Use this when the caller knows the domain
-//!   won't be broken by removing those keys.
+//!   `pingback_id`).
+//! - [`url::validate_url`] — SSRF/homograph/scheme/credentials validation
+//!   that returns a [`url::ValidatedUrl`] opaque wrapper. Every SDK
+//!   consumer that performs a network fetch on behalf of a caller
+//!   should run the input through this first.
 //!
-//! Both variants strip parameters from the `?` query AND, per
-//! defense-in-depth, from `#...` fragments that themselves contain
-//! `key=value` pairs (common pattern in SPAs). Matrix parameters
+//! Both tracking-stripper variants strip parameters from the `?` query
+//! AND, per defense-in-depth, from `#...` fragments that themselves
+//! contain `key=value` pairs (common pattern in SPAs). Matrix parameters
 //! (`/foo;utm_source=x/bar`) are deliberately not processed — the `url`
 //! crate does not expose them, and hand-rolling a splitter risks
 //! breaking legitimate pathsegments.
 
-use url::Url;
+pub mod url;
+
+use ::url::Url;
 
 /// Conservative tracking-parameter blocklist.
 ///
@@ -250,7 +251,7 @@ fn strip_query(parsed: &mut Url, is_tracker: &impl Fn(&str) -> bool) {
     if cleaned.is_empty() {
         parsed.set_query(None);
     } else {
-        let new_query = url::form_urlencoded::Serializer::new(String::new())
+        let new_query = ::url::form_urlencoded::Serializer::new(String::new())
             .extend_pairs(cleaned.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .finish();
         parsed.set_query(Some(&new_query));
@@ -289,7 +290,7 @@ fn strip_fragment(parsed: &mut Url, is_tracker: &impl Fn(&str) -> bool) {
 
     // Parse the fragment's query-portion the same way the `?`-query is
     // parsed: form-urlencoded key/value pairs.
-    let kept: Vec<(String, String)> = url::form_urlencoded::parse(query_part.as_bytes())
+    let kept: Vec<(String, String)> = ::url::form_urlencoded::parse(query_part.as_bytes())
         .filter(|(k, _)| !is_tracker(k))
         .map(|(k, v)| (k.into_owned(), v.into_owned()))
         .collect();
@@ -298,7 +299,7 @@ fn strip_fragment(parsed: &mut Url, is_tracker: &impl Fn(&str) -> bool) {
     let new_query = if kept.is_empty() {
         String::new()
     } else {
-        url::form_urlencoded::Serializer::new(String::new())
+        ::url::form_urlencoded::Serializer::new(String::new())
             .extend_pairs(kept.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .finish()
     };

@@ -68,6 +68,32 @@ pub enum PrivacySuiteError {
     /// Invalid OPAQUE wire message.
     #[error("invalid OPAQUE message")]
     AuthInvalidMessage,
+    // ── URL validation (G2) ────────────────────────────────────────
+    //
+    // Distinct variants rather than a single `UrlInvalid` so Kotlin/Swift
+    // callers can surface a precise reason to the user without string-
+    // matching the `Display` output.
+    /// URL failed to parse.
+    #[error("URL parse failed")]
+    UrlParse,
+    /// URL scheme is not http/https.
+    #[error("URL scheme must be http or https")]
+    UrlInvalidScheme,
+    /// URL has no host component.
+    #[error("URL must have a host component")]
+    UrlMissingHost,
+    /// URL host is a private/reserved IP address.
+    #[error("URL host resolves to a private/reserved address")]
+    UrlPrivateAddress,
+    /// URL contains CR/LF/NUL/bidi characters.
+    #[error("URL host contains disallowed characters")]
+    UrlInvalidHostCharacters,
+    /// URL embeds user:pass@ credentials.
+    #[error("URL embeds credentials")]
+    UrlEmbeddedCredentials,
+    /// URL host is an obfuscated IP encoding.
+    #[error("URL host is an obfuscated IP encoding")]
+    UrlObfuscatedIpEncoding,
 }
 
 impl From<CryptoError> for PrivacySuiteError {
@@ -82,6 +108,21 @@ impl From<CryptoError> for PrivacySuiteError {
             CryptoError::Base64Decode => Self::Base64Decode,
             CryptoError::SignatureInvalid => Self::SignatureInvalid,
             CryptoError::InvalidKey => Self::InvalidKey,
+        }
+    }
+}
+
+impl From<privacysuite_core_sdk::privacy_utils::url::UrlError> for PrivacySuiteError {
+    fn from(e: privacysuite_core_sdk::privacy_utils::url::UrlError) -> Self {
+        use privacysuite_core_sdk::privacy_utils::url::UrlError as U;
+        match e {
+            U::Parse(_) => Self::UrlParse,
+            U::InvalidScheme(_) => Self::UrlInvalidScheme,
+            U::MissingHost => Self::UrlMissingHost,
+            U::PrivateAddress => Self::UrlPrivateAddress,
+            U::InvalidHostCharacters => Self::UrlInvalidHostCharacters,
+            U::EmbeddedCredentials => Self::UrlEmbeddedCredentials,
+            U::ObfuscatedIpEncoding => Self::UrlObfuscatedIpEncoding,
         }
     }
 }
@@ -501,4 +542,28 @@ pub fn login_finish(
         let _ = (state, server_response);
         Err(PrivacySuiteError::AuthProtocol)
     }
+}
+
+// ---------------------------------------------------------------------------
+// URL validation (G2)
+// ---------------------------------------------------------------------------
+
+/// Validate and normalise a URL for safe fetching.
+///
+/// Returns the normalised URL string (fragment + credentials stripped,
+/// host lowercased) on success, or a [`PrivacySuiteError`] variant
+/// identifying the specific rejection class.
+///
+/// Returning the string rather than an opaque `ValidatedUrl` handle is a
+/// deliberate simplification for the UniFFI boundary: `ValidatedUrl` is a
+/// tiny wrapper whose only purpose is type-level proof that validation
+/// occurred, and surfacing that across FFI would require an `Arc`-backed
+/// object handle with no meaningful methods on the foreign side. Callers
+/// in Kotlin/Swift that need the normalised string can call this function
+/// and trust the output; callers that need to re-validate (e.g. redirect
+/// hops) should pass the string back in for another check.
+#[uniffi::export]
+pub fn validate_url(input: String) -> Result<String, PrivacySuiteError> {
+    let validated = privacysuite_core_sdk::privacy_utils::url::validate_url(&input)?;
+    Ok(validated.as_str().to_owned())
 }

@@ -25,8 +25,20 @@
 //! - [`crdt`] — End-to-end encrypted CRDT documents backed by Automerge (**`sync`** feature).
 //! - [`sync`] — E2EE sync protocol over a `WebSocket` relay (**`sync`** feature).
 //! - [`networking`] — Multi-tier privacy networking: `DoH`, OHTTP, and Tor (**`networking`** feature).
+//! - [`keystore`] — Android Keystore / StrongBox wrapper around `VaultKey` (**`keystore`** feature, Android-only).
+//!
+//! ## `unsafe` policy
+//!
+//! This crate is 100 % safe Rust with **one** documented exception: the
+//! Android Keystore JNI bridge in [`keystore::android`] adopts a raw
+//! `JavaVM*` pointer supplied by the NDK at process start (see the
+//! `SAFETY` comment there). That single site is annotated with
+//! `#[allow(unsafe_code)]`; the crate-level lint is configured at `deny`
+//! rather than `forbid` specifically to permit that override. No other
+//! `unsafe` block exists or may be added — `grep -r "allow(unsafe_code)"
+//! src/` must only ever surface the Keystore bridge.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![deny(warnings)]
 
 #[cfg(feature = "auth")]
@@ -35,6 +47,8 @@ pub mod auth;
 pub mod crdt;
 pub mod crypto;
 pub mod error;
+#[cfg(feature = "keystore")]
+pub mod keystore;
 #[cfg(feature = "networking")]
 pub mod networking;
 pub mod privacy_utils;

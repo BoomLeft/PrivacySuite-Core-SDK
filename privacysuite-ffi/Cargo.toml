@@ -37,6 +37,12 @@ auth = ["privacysuite-core-sdk/auth"]
 # the schema types; no WebSocket / relay code is added to the FFI surface
 # (those stay Rust-only for now).
 sync = ["privacysuite-core-sdk/sync"]
+# G5: expose `KeystoreVault` across UniFFI. Enabling this on a non-Android
+# host still compiles — the exported Rust symbols go through the core
+# SDK's stub types and every method returns `KeystoreError::NotAvailable`
+# at runtime. The Android AAR build turns this feature on; other
+# consumer apps can opt out to keep the Kotlin surface smaller.
+keystore = ["privacysuite-core-sdk/keystore"]
 
 [dependencies]
 # SECURITY: FFI boundary dependencies pinned to exact versions.

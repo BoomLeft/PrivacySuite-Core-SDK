@@ -29,6 +29,14 @@
 //!   Rust consumers for now; Phase 2 will expose a chunked byte-array
 //!   API that mobile can call in a loop (push plaintext bytes, pull
 //!   ciphertext bytes, finalize).
+//!
+//! # What IS exported under feature gates
+//!
+//! - **Android Keystore (G5 — `keystore::KeystoreVault`)** behind the
+//!   `keystore` feature. The AAR build pipeline turns this on
+//!   unconditionally; other UniFFI consumers (iOS, desktop) can leave
+//!   it off since the module is a no-op off-device anyway. See the
+//!   `KeystoreVaultHandle` section below.
 
 use std::sync::Arc;
 
@@ -130,6 +138,36 @@ pub enum PrivacySuiteError {
     /// Parsing the image header overflowed a size computation.
     #[error("image parse arithmetic overflowed")]
     ImageIntegerOverflow,
+
+    // ── Android Keystore (G5) ──────────────────────────────────────
+    //
+    // The `KeystoreVaultHandle` FFI is Android-only at runtime, but the
+    // error enum stays target-independent so consumers can match on
+    // variants without `cfg` gymnastics. On non-Android targets every
+    // Keystore method simply returns `KeystoreNotAvailable`.
+    /// Android Keystore backend is not available (non-Android build or
+    /// the NDK hasn't yet populated `android_context`).
+    #[error("Android Keystore is not available on this platform")]
+    KeystoreNotAvailable,
+    /// Caller asked for a `StrongBox`-backed key but the device doesn't
+    /// offer one.
+    #[error("hardware-backed keystore (StrongBox) is required but unavailable")]
+    KeystoreHardwareBackedRequired,
+    /// The Keystore key requires a biometric/credential auth that
+    /// hasn't happened (or has expired) — caller must re-authenticate
+    /// and retry.
+    #[error("biometric authentication is required")]
+    KeystoreBiometricRequired,
+    /// The user dismissed the biometric / credential prompt.
+    #[error("user cancelled authentication")]
+    KeystoreUserCancelled,
+    /// A lower-level Keystore JNI failure. The inner message is
+    /// sanitised (never contains key material).
+    #[error("keystore error: {message}")]
+    KeystoreIo {
+        /// Short, non-sensitive description of where the failure occurred.
+        message: String,
+    },
 }
 
 impl From<CryptoError> for PrivacySuiteError {
@@ -836,6 +874,200 @@ pub fn inspect_image_dimensions(
     let info = privacysuite_core_sdk::crypto::media::inspect_dimensions(&bytes)?;
     Ok(info.into())
 }
+// G5: Android Keystore (KeystoreVaultHandle)
+// ---------------------------------------------------------------------------
+//
+// The Keystore FFI is conditionally compiled behind the `keystore` feature
+// of this crate (which forwards to the core SDK's `keystore` feature). The
+// real implementation only runs on `target_os = "android"`; on other hosts
+// the underlying core SDK module exposes stub types whose methods all
+// return `KeystoreError::NotAvailable`. Surfacing this across UniFFI lets
+// native-Kotlin consumers (Voice, Scratchpad, Scanner, Telephoto) wrap and
+// unwrap `VaultKey` material without hand-rolling their own JNI shims.
+
+#[cfg(feature = "keystore")]
+mod keystore_ffi {
+    use std::sync::Arc;
+
+    use privacysuite_core_sdk::keystore::{BiometricPolicy, KeystoreError, KeystoreVault};
+
+    use super::{PrivacySuiteError, VaultKeyHandle};
+
+    impl From<KeystoreError> for PrivacySuiteError {
+        fn from(e: KeystoreError) -> Self {
+            match e {
+                KeystoreError::NotAvailable => Self::KeystoreNotAvailable,
+                KeystoreError::HardwareBackedRequired => Self::KeystoreHardwareBackedRequired,
+                KeystoreError::BiometricRequired => Self::KeystoreBiometricRequired,
+                KeystoreError::UserCancelled => Self::KeystoreUserCancelled,
+                KeystoreError::Io(message) => Self::KeystoreIo { message },
+                KeystoreError::Crypto(c) => Self::from(c),
+            }
+        }
+    }
+
+    /// Biometric gating applied at key-provisioning time.
+    ///
+    /// Mirrors the Rust-side [`BiometricPolicy`] enum. The
+    /// `invalidate_after_secs` tuple value of `DeviceCredential` maps
+    /// 1:1 onto `setUserAuthenticationParameters(timeout, flags)` on
+    /// the Android side; `0` means the credential must be presented on
+    /// every operation.
+    #[derive(Debug, Copy, Clone, uniffi::Enum)]
+    pub enum BiometricPolicyFfi {
+        /// No biometric gate; key is still hardware-backed.
+        None,
+        /// Require device credential (PIN / pattern / password) within
+        /// the last `invalidate_after_secs` seconds.
+        DeviceCredential {
+            /// Validity window in seconds; `0` = require on every op.
+            invalidate_after_secs: u32,
+        },
+        /// Per-use biometric authentication.
+        Biometric,
+        /// Biometric OR device credential, chosen at prompt time.
+        BiometricOrDeviceCredential,
+    }
+
+    impl From<BiometricPolicyFfi> for BiometricPolicy {
+        fn from(p: BiometricPolicyFfi) -> Self {
+            match p {
+                BiometricPolicyFfi::None => Self::None,
+                BiometricPolicyFfi::DeviceCredential {
+                    invalidate_after_secs,
+                } => Self::DeviceCredential {
+                    invalidate_after_secs,
+                },
+                BiometricPolicyFfi::Biometric => Self::Biometric,
+                BiometricPolicyFfi::BiometricOrDeviceCredential => Self::BiometricOrDeviceCredential,
+            }
+        }
+    }
+
+    /// Opaque Android-Keystore-backed wrapping key.
+    ///
+    /// On non-Android targets every method returns
+    /// [`PrivacySuiteError::KeystoreNotAvailable`]. Hold the handle for
+    /// the lifetime of the vault; drop it when the app no longer needs
+    /// wrap/unwrap access (the handle owns nothing but an `Arc`, so
+    /// dropping is cheap).
+    #[derive(uniffi::Object)]
+    pub struct KeystoreVaultHandle {
+        // `std::sync::Mutex` because `KeystoreVault::delete` consumes
+        // `self`; we take the inner by `Option::take` on delete and
+        // leave `None` so subsequent calls fail cleanly.
+        inner: std::sync::Mutex<Option<KeystoreVault>>,
+    }
+
+    #[uniffi::export]
+    impl KeystoreVaultHandle {
+        /// Open or create a Keystore-held wrapping key under `alias`.
+        ///
+        /// See `privacysuite_core_sdk::keystore::KeystoreVault::open_or_create`
+        /// for the full semantics.
+        #[uniffi::constructor]
+        pub fn open_or_create(
+            alias: String,
+            policy: BiometricPolicyFfi,
+            require_strongbox: bool,
+        ) -> Result<Arc<Self>, PrivacySuiteError> {
+            let v = KeystoreVault::open_or_create(&alias, policy.into(), require_strongbox)?;
+            Ok(Arc::new(Self {
+                inner: std::sync::Mutex::new(Some(v)),
+            }))
+        }
+
+        /// Returns `true` iff the key is hardware-backed.
+        pub fn is_hardware_backed(&self) -> Result<bool, PrivacySuiteError> {
+            let guard = self
+                .inner
+                .lock()
+                .map_err(|_| PrivacySuiteError::KeystoreIo {
+                    message: "keystore vault mutex poisoned".into(),
+                })?;
+            match guard.as_ref() {
+                Some(v) => Ok(v.is_hardware_backed()?),
+                None => Err(PrivacySuiteError::KeystoreNotAvailable),
+            }
+        }
+
+        /// Returns `true` iff the key lives in a `StrongBox` keymaster.
+        pub fn is_strongbox_backed(&self) -> Result<bool, PrivacySuiteError> {
+            let guard = self
+                .inner
+                .lock()
+                .map_err(|_| PrivacySuiteError::KeystoreIo {
+                    message: "keystore vault mutex poisoned".into(),
+                })?;
+            match guard.as_ref() {
+                Some(v) => Ok(v.is_strongbox_backed()?),
+                None => Err(PrivacySuiteError::KeystoreNotAvailable),
+            }
+        }
+
+        /// Seal a [`VaultKeyHandle`] into an opaque wrapped blob safe to
+        /// write to disk.
+        pub fn wrap_vault_key(
+            &self,
+            key: &VaultKeyHandle,
+        ) -> Result<Vec<u8>, PrivacySuiteError> {
+            let guard = self
+                .inner
+                .lock()
+                .map_err(|_| PrivacySuiteError::KeystoreIo {
+                    message: "keystore vault mutex poisoned".into(),
+                })?;
+            match guard.as_ref() {
+                Some(v) => Ok(v.wrap_vault_key(&key.inner)?),
+                None => Err(PrivacySuiteError::KeystoreNotAvailable),
+            }
+        }
+
+        /// Inverse of [`KeystoreVaultHandle::wrap_vault_key`]. May
+        /// return [`PrivacySuiteError::KeystoreBiometricRequired`] if
+        /// the key's auth window has lapsed.
+        pub fn unwrap_vault_key(
+            &self,
+            wrapped: Vec<u8>,
+        ) -> Result<Arc<VaultKeyHandle>, PrivacySuiteError> {
+            let guard = self
+                .inner
+                .lock()
+                .map_err(|_| PrivacySuiteError::KeystoreIo {
+                    message: "keystore vault mutex poisoned".into(),
+                })?;
+            match guard.as_ref() {
+                Some(v) => {
+                    let vk = v.unwrap_vault_key(&wrapped)?;
+                    Ok(Arc::new(VaultKeyHandle { inner: vk }))
+                }
+                None => Err(PrivacySuiteError::KeystoreNotAvailable),
+            }
+        }
+
+        /// Permanently remove the Keystore-held key. Subsequent method
+        /// calls on this handle return [`PrivacySuiteError::KeystoreNotAvailable`].
+        pub fn delete(&self) -> Result<(), PrivacySuiteError> {
+            let mut guard = self
+                .inner
+                .lock()
+                .map_err(|_| PrivacySuiteError::KeystoreIo {
+                    message: "keystore vault mutex poisoned".into(),
+                })?;
+            match guard.take() {
+                Some(v) => Ok(v.delete()?),
+                None => Err(PrivacySuiteError::KeystoreNotAvailable),
+            }
+        }
+    }
+
+    // The types above are re-exported at the crate root (see the
+    // `pub use` below) so UniFFI scaffolding picks them up under the
+    // stable names `KeystoreVaultHandle` and `BiometricPolicyFfi`.
+}
+
+#[cfg(feature = "keystore")]
+pub use self::keystore_ffi::{BiometricPolicyFfi, KeystoreVaultHandle};
 
 // ---------------------------------------------------------------------------
 // G1: PrivacyClient (DEFERRED FOR FFI — Phase 2)

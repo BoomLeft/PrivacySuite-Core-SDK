@@ -566,6 +566,114 @@ pub fn login_finish(
 }
 
 // ---------------------------------------------------------------------------
+// PIN lock (G6)
+// ---------------------------------------------------------------------------
+//
+// Two of the three `auth::pin_lock` primitives lift cleanly across UniFFI:
+//
+//   * `pin_derive_key` — pure function; PIN bytes + salt handle ->
+//     VaultKey handle. No callback, no persistent state.
+//   * `pin_status`      — pure query over a plain-data state struct.
+//
+// `try_pin` is *not* exported here. It takes a `verify_fn` callback that
+// decides whether a freshly-derived key is correct, and UniFFI 0.31's
+// callback interfaces don't round-trip the `Arc<VaultKeyHandle>` argument
+// ergonomically. Kotlin / Swift callers can assemble the equivalent flow
+// at the higher layer with the primitives exported here:
+//
+//   1. call `pin_status`; if locked, show the countdown and return.
+//   2. call `pin_derive_key(pin, salt)` -> VaultKey handle.
+//   3. call `aead_decrypt` against the stored canary; on success, call
+//      `pin_status` again after resetting state in their persistence
+//      layer.
+//
+// A Phase-2 follow-up will add the callback-based `try_pin` export once
+// we settle on a UniFFI pattern for "caller-supplied predicate over an
+// opaque handle"; tracked in the G6 PR description.
+
+/// PIN attempt counter + exponential lockout timer. Mirror of
+/// [`privacysuite_core_sdk::auth::pin_lock::PinAttemptState`] flattened
+/// into a UniFFI `Record` so Kotlin / Swift callers can round-trip it
+/// through their own persistence without learning about opaque handles.
+#[cfg(feature = "auth")]
+#[derive(uniffi::Record)]
+pub struct PinStateFfi {
+    /// Consecutive wrong-PIN attempts recorded.
+    pub attempt_count: u32,
+    /// Wall-clock (Unix milliseconds) at which the current lockout
+    /// expires. `0` means "not currently locked".
+    pub lockout_until_unix_ms: u64,
+    /// Wall-clock (Unix milliseconds) of the last PIN attempt.
+    pub last_attempt_unix_ms: u64,
+}
+
+/// PIN lockout snapshot — what the UI needs to render. Derived from a
+/// [`PinStateFfi`] + caller-supplied wall-clock by [`pin_status`].
+#[cfg(feature = "auth")]
+#[derive(uniffi::Record)]
+pub struct PinStatusFfi {
+    /// `true` while the user must wait out the current lockout.
+    pub is_locked: bool,
+    /// Seconds remaining on the current lockout. `0` when not locked.
+    pub remaining_secs: u64,
+    /// How many more wrong guesses fit inside the free-attempt budget
+    /// before the next lockout tier activates.
+    pub attempts_left_before_next_lockout: u32,
+}
+
+#[cfg(feature = "auth")]
+impl From<privacysuite_core_sdk::auth::pin_lock::PinAttemptState> for PinStateFfi {
+    fn from(s: privacysuite_core_sdk::auth::pin_lock::PinAttemptState) -> Self {
+        Self {
+            attempt_count: s.attempt_count,
+            lockout_until_unix_ms: s.lockout_until_unix_ms,
+            last_attempt_unix_ms: s.last_attempt_unix_ms,
+        }
+    }
+}
+
+#[cfg(feature = "auth")]
+impl From<PinStateFfi> for privacysuite_core_sdk::auth::pin_lock::PinAttemptState {
+    fn from(s: PinStateFfi) -> Self {
+        Self {
+            attempt_count: s.attempt_count,
+            lockout_until_unix_ms: s.lockout_until_unix_ms,
+            last_attempt_unix_ms: s.last_attempt_unix_ms,
+        }
+    }
+}
+
+/// Derive a VaultKey from a PIN attempt using the PIN-tuned Argon2id
+/// parameters. Wraps [`privacysuite_core_sdk::auth::pin_lock::derive_key_from_pin`].
+///
+/// The caller tests the returned key against their canary to decide
+/// whether the PIN was correct — the SDK never compares secret bytes
+/// directly across the FFI boundary.
+#[cfg(feature = "auth")]
+#[uniffi::export]
+pub fn pin_derive_key(
+    pin: Vec<u8>,
+    salt: &SaltHandle,
+) -> Result<Arc<VaultKeyHandle>, PrivacySuiteError> {
+    let key = privacysuite_core_sdk::auth::pin_lock::derive_key_from_pin(&pin, &salt.inner)?;
+    Ok(Arc::new(VaultKeyHandle { inner: key }))
+}
+
+/// Snapshot the lockout posture of a persisted PIN attempt state.
+#[cfg(feature = "auth")]
+#[uniffi::export]
+#[must_use]
+pub fn pin_status(state: PinStateFfi, now_unix_ms: u64) -> PinStatusFfi {
+    let native = privacysuite_core_sdk::auth::pin_lock::PinAttemptState::from(state);
+    let status = privacysuite_core_sdk::auth::pin_lock::status(&native, now_unix_ms);
+    PinStatusFfi {
+        is_locked: status.is_locked,
+        remaining_secs: status.remaining_secs,
+        attempts_left_before_next_lockout: status.attempts_left_before_next_lockout,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // URL validation (G2)
 // ---------------------------------------------------------------------------
 

@@ -15,7 +15,13 @@ publish = false
 
 [features]
 default = ["auth"]
-auth = ["dep:opaque-ke"]
+# `auth` pulls in `serde` so `auth::pin_lock::PinAttemptState` can be
+# (de)serialised by callers that persist it to disk (shared-prefs,
+# SQLite row, on-disk JSON blob, ...). `serde` was already an optional
+# dependency gated behind `sync`, so enabling it here just activates it
+# eagerly for the auth-only build rather than introducing a new
+# dependency. See `auth::pin_lock` for why callers need the derive.
+auth = ["dep:opaque-ke", "dep:serde"]
 storage = ["dep:rusqlite"]
 sync = ["dep:automerge", "dep:tokio", "dep:tokio-tungstenite", "dep:native-tls", "dep:tokio-native-tls", "dep:futures-util", "dep:serde", "dep:serde_json"]
 networking = ["dep:hickory-resolver", "dep:tokio-socks", "dep:tokio"]

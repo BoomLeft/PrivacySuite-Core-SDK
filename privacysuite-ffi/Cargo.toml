@@ -1,10 +1,11 @@
 [package]
 name = "privacysuite-ffi"
-# Bumped to 0.2.0 when the Android AAR build infrastructure landed. The
-# crate's Rust surface is unchanged; the bump reflects the first published
-# AAR artifact (`privacysuite-ffi-0.2.0.aar`) so consumer apps can pin a
+# Version tracks the SDK tag the AAR is cut from, so consumers can pin a
 # concrete version-tagged filename in `app/libs/`.
-version = "0.2.0"
+#   0.2.0 — first published AAR (landed alongside SDK v0.2.0).
+#   0.3.0 — SDK v0.3.0 additions: validate_url, image metadata + dimension
+#           gate, blind_index, pin_lock, KeystoreVault, BackgroundSync.
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.88"
 description = "UniFFI bindings for PrivacySuite Core SDK — Android/iOS/Desktop"

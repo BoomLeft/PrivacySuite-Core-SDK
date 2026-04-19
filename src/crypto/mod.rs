@@ -3,6 +3,7 @@
 //! - **[`keys`]** — Argon2id key derivation (default and configurable params), zeroizing key and salt types.
 //! - **[`kdf`]** — BLAKE3-based sub-key derivation for key hierarchies.
 //! - **[`aead`]** — XChaCha20-Poly1305 authenticated encryption.
+//! - **[`stream`]** — Chunked streaming AEAD (STREAM construction) for files.
 //! - **[`hash`]** — BLAKE3 content hashing for integrity and deduplication.
 //! - **[`mnemonic`]** — BIP39 24-word recovery phrase generation and recovery.
 //! - **[`pairing`]** — X25519 device pairing, BLAKE3 key derivation, Ed25519 signing.
@@ -39,4 +40,5 @@ pub mod keys;
 pub mod mnemonic;
 pub mod pairing;
 pub mod pinning;
+pub mod stream;
 pub mod util;

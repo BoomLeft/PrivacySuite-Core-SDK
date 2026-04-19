@@ -38,6 +38,18 @@ pub enum CryptoError {
     /// A key or public value is cryptographically invalid (e.g., an X25519
     /// low-order point that would yield a predictable shared secret).
     InvalidKey,
+    /// A streaming-AEAD ciphertext ended before its terminating last-chunk
+    /// was authenticated. The stream may have been truncated in transit or
+    /// at rest; the plaintext MUST be rejected rather than consumed.
+    StreamTruncated,
+    /// A streaming-AEAD header was missing, short, or otherwise malformed.
+    StreamInvalidHeader,
+    /// A streaming-AEAD chunk index moved outside the allowed counter
+    /// range (2^31 chunks, i.e. the last-chunk bit collided with real data).
+    StreamChunkIndexMismatch,
+    /// A streaming-AEAD writer received a `write` call after `finalize`
+    /// had already emitted the terminating chunk.
+    StreamAlreadyFinalized,
 }
 
 impl fmt::Display for CryptoError {
@@ -52,6 +64,10 @@ impl fmt::Display for CryptoError {
             Self::Base64Decode => "base64 decoding failed",
             Self::SignatureInvalid => "signature verification failed",
             Self::InvalidKey => "invalid cryptographic key",
+            Self::StreamTruncated => "streaming ciphertext was truncated",
+            Self::StreamInvalidHeader => "streaming ciphertext header is invalid",
+            Self::StreamChunkIndexMismatch => "streaming ciphertext chunk index out of range",
+            Self::StreamAlreadyFinalized => "streaming writer was already finalized",
         })
     }
 }

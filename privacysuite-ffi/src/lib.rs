@@ -18,6 +18,17 @@
 //! │  Generated Kotlin / Swift       │  ← Idiomatic foreign API
 //! └─────────────────────────────────┘
 //! ```
+//!
+//! # What is NOT exported here
+//!
+//! - **Streaming AEAD (G3 — `crypto::stream`).** The chunked
+//!   `EncryptedFileWriter` / `EncryptedFileReader` API takes
+//!   `std::io::Write` / `std::io::Read` handles, which do not cross the
+//!   UniFFI boundary cleanly (no shared file-descriptor story across
+//!   Kotlin/Swift/Rust). Streaming AEAD is therefore feature-gated to
+//!   Rust consumers for now; Phase 2 will expose a chunked byte-array
+//!   API that mobile can call in a loop (push plaintext bytes, pull
+//!   ciphertext bytes, finalize).
 
 use std::sync::Arc;
 
@@ -82,6 +93,16 @@ impl From<CryptoError> for PrivacySuiteError {
             CryptoError::Base64Decode => Self::Base64Decode,
             CryptoError::SignatureInvalid => Self::SignatureInvalid,
             CryptoError::InvalidKey => Self::InvalidKey,
+            // G3 streaming AEAD is feature-gated to Rust consumers for
+            // now; Phase 2 will expose a chunked byte-array API that
+            // mobile can call in a loop. Until that lands, coalesce the
+            // streaming-specific error variants onto the closest FFI-
+            // visible sibling so existing Kotlin / Swift callers keep
+            // compiling unchanged.
+            CryptoError::StreamTruncated
+            | CryptoError::StreamInvalidHeader
+            | CryptoError::StreamChunkIndexMismatch => Self::Decryption,
+            CryptoError::StreamAlreadyFinalized => Self::Encryption,
         }
     }
 }

@@ -17,6 +17,9 @@
 //! - [`crypto`] — Key derivation (`Argon2id`), AEAD (`XChaCha20-Poly1305`),
 //!   BIP39 mnemonic recovery, zeroization of all key material.
 //! - [`error`] — Unified error types (fail-closed, no information leakage).
+//! - [`logging`] — Documentation-only module describing the SDK's
+//!   zero-log-traffic posture and the contract any future log call
+//!   site must satisfy. No executable code.
 //!
 //! ### Feature-gated modules
 //!
@@ -47,6 +50,7 @@ pub mod auth;
 pub mod crdt;
 pub mod crypto;
 pub mod error;
+pub mod logging;
 #[cfg(feature = "keystore")]
 pub mod keystore;
 #[cfg(feature = "networking")]

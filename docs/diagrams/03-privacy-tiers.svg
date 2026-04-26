@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 760" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-labelledby="title desc">
+  <title id="title">Multi-tier privacy networking</title>
+  <desc id="desc">Three privacy tiers — DNS-over-HTTPS, Oblivious HTTP, and Tor SOCKS5 — and what each network observer sees at each tier.</desc>
+
+  <defs>
+    <style>
+      .bg { fill: #ffffff; }
+      .title { fill: #0f172a; font-size: 26px; font-weight: 700; }
+      .subtitle { fill: #475569; font-size: 14px; }
+      .section { fill: #0f172a; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+      .label { fill: #0f172a; font-size: 14px; font-weight: 600; }
+      .body { fill: #334155; font-size: 13px; }
+      .mono { font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, monospace; font-size: 12px; fill: #0f172a; }
+      .caption { fill: #64748b; font-size: 11.5px; }
+      .tier { fill: #ffffff; stroke: #e2e8f0; stroke-width: 1.5; }
+      .tier1 { fill: #ecfeff; stroke: #06b6d4; stroke-width: 2; }
+      .tier2 { fill: #eef2ff; stroke: #6366f1; stroke-width: 2; }
+      .tier3 { fill: #f5f3ff; stroke: #8b5cf6; stroke-width: 2; }
+      .node { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.4; }
+      .client { fill: #ecfdf5; stroke: #059669; stroke-width: 1.6; }
+      .target { fill: #fff7ed; stroke: #ea580c; stroke-width: 1.6; }
+      .visible { fill: #fef2f2; stroke: #dc2626; stroke-width: 1; }
+      .hidden  { fill: #ecfdf5; stroke: #059669; stroke-width: 1; }
+      .arrow { fill: none; stroke: #475569; stroke-width: 1.6; }
+      .arrow-strong { fill: none; stroke: #4f46e5; stroke-width: 2.2; }
+      .check { fill: #059669; font-weight: 700; }
+      .x { fill: #dc2626; font-weight: 700; }
+    </style>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="arr-i" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4f46e5"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1180" height="760"/>
+
+  <text class="title" x="40" y="56">Multi-Tier Privacy Networking</text>
+  <text class="subtitle" x="40" y="80">Three opt-in tiers in privacysuite-core-sdk::networking. Higher tier ⇒ stronger anonymity, slightly more latency.</text>
+
+  <!-- Common header columns -->
+  <g transform="translate(40, 120)">
+    <text class="section" x="60"  y="0">Client</text>
+    <text class="section" x="270" y="0">ISP / on-path</text>
+    <text class="section" x="490" y="0">Relay / proxy</text>
+    <text class="section" x="720" y="0">Gateway / exit</text>
+    <text class="section" x="940" y="0">Target server</text>
+  </g>
+
+  <!-- Tier 1 -->
+  <g transform="translate(40, 140)">
+    <rect class="tier1" width="1100" height="170" rx="14"/>
+    <text class="label" x="20" y="32" fill="#0e7490">Tier 1 · Standard — DNS-over-HTTPS</text>
+    <text class="caption" x="20" y="50">DoH to Cloudflare 1.1.1.1 and Quad9 9.9.9.9. SSRF filter strips RFC 1918 / loopback / link-local / CGNAT / cloud-metadata.</text>
+
+    <!-- nodes -->
+    <g transform="translate(20, 70)">
+      <g><rect class="client" width="120" height="80" rx="10"/>
+         <text class="label" x="14" y="24">Device</text>
+         <text class="caption" x="14" y="44">app + SDK</text>
+         <text class="caption" x="14" y="62">DoH-only resolver</text>
+      </g>
+
+      <g transform="translate(190, 0)"><rect class="node" width="160" height="80" rx="10"/>
+         <text class="label" x="14" y="24">ISP</text>
+         <text class="caption" x="14" y="44">sees TLS to 1.1.1.1</text>
+         <text class="caption" x="14" y="62">cannot read DNS query</text>
+      </g>
+
+      <g transform="translate(420, 0)"><rect class="node" width="160" height="80" rx="10"/>
+         <text class="label" x="14" y="24">DoH resolver</text>
+         <text class="caption" x="14" y="44">Cloudflare · Quad9</text>
+         <text class="caption" x="14" y="62">sees query, not content</text>
+      </g>
+
+      <g transform="translate(650, 0)"><rect class="node" width="160" height="80" rx="10"/>
+         <text class="label" x="14" y="24">— n/a —</text>
+         <text class="caption" x="14" y="44">no relay at Tier 1</text>
+      </g>
+
+      <g transform="translate(880, 0)"><rect class="target" width="180" height="80" rx="10"/>
+         <text class="label" x="14" y="24">api.example.com</text>
+         <text class="caption" x="14" y="44">sees client IP</text>
+         <text class="caption" x="14" y="62">+ HTTP request</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- Tier 2 -->
+  <g transform="translate(40, 330)">
+    <rect class="tier2" width="1100" height="170" rx="14"/>
+    <text class="label" x="20" y="32" fill="#4338ca">Tier 2 · Enhanced — Oblivious HTTP (RFC 9458)</text>
+    <text class="caption" x="20" y="50">Two non-colluding parties: relay sees IP but only ciphertext; gateway decrypts but only sees the relay’s IP.</text>
+
+    <g transform="translate(20, 70)">
+      <g><rect class="client" width="120" height="80" rx="10"/>
+         <text class="label" x="14" y="24">Device</text>
+         <text class="caption" x="14" y="44">encrypts capsule to</text>
+         <text class="caption" x="14" y="62">gateway HPKE pubkey</text>
+      </g>
+
+      <g transform="translate(190, 0)"><rect class="node" width="160" height="80" rx="10"/>
+         <text class="label" x="14" y="24">ISP</text>
+         <text class="caption" x="14" y="44">sees TLS to relay only</text>
+      </g>
+
+      <g transform="translate(420, 0)"><rect class="node" width="160" height="80" rx="10"/>
+         <text class="label" x="14" y="24">OHTTP relay</text>
+         <text class="caption" x="14" y="44">sees client IP</text>
+         <text class="caption" x="14" y="62">+ opaque ciphertext</text>
+      </g>
+
+      <g transform="translate(650, 0)"><rect class="node" width="160" height="80" rx="10"/>
+         <text class="label" x="14" y="24">OHTTP gateway</text>
+         <text class="caption" x="14" y="44">decrypts capsule</text>
+         <text class="caption" x="14" y="62">never sees client IP</text>
+      </g>
+
+      <g transform="translate(880, 0)"><rect class="target" width="180" height="80" rx="10"/>
+         <text class="label" x="14" y="24">api.example.com</text>
+         <text class="caption" x="14" y="44">sees gateway IP only</text>
+         <text class="caption" x="14" y="62">+ HTTP request</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- Tier 3 -->
+  <g transform="translate(40, 520)">
+    <rect class="tier3" width="1100" height="170" rx="14"/>
+    <text class="label" x="20" y="32" fill="#6d28d9">Tier 3 · Maximum — Tor via external SOCKS5 daemon</text>
+    <text class="caption" x="20" y="50">Same architecture as Signal / Tor Browser. SDK never embeds Tor — connects to local 127.0.0.1:9050. Errors are opaque (TOR_CONNECT_ERR_MSG).</text>
+
+    <g transform="translate(20, 70)">
+      <g><rect class="client" width="120" height="80" rx="10"/>
+         <text class="label" x="14" y="24">Device</text>
+         <text class="caption" x="14" y="44">SOCKS5 to local Tor</text>
+      </g>
+
+      <g transform="translate(190, 0)"><rect class="node" width="160" height="80" rx="10"/>
+         <text class="label" x="14" y="24">ISP</text>
+         <text class="caption" x="14" y="44">sees Tor traffic only</text>
+         <text class="caption" x="14" y="62">no destination, no DNS</text>
+      </g>
+
+      <g transform="translate(420, 0)"><rect class="node" width="160" height="80" rx="10"/>
+         <text class="label" x="14" y="24">Tor entry / middle</text>
+         <text class="caption" x="14" y="44">onion-routed circuit</text>
+         <text class="caption" x="14" y="62">layered encryption</text>
+      </g>
+
+      <g transform="translate(650, 0)"><rect class="node" width="160" height="80" rx="10"/>
+         <text class="label" x="14" y="24">Tor exit relay</text>
+         <text class="caption" x="14" y="44">sees TLS to target</text>
+         <text class="caption" x="14" y="62">does not see client IP</text>
+      </g>
+
+      <g transform="translate(880, 0)"><rect class="target" width="180" height="80" rx="10"/>
+         <text class="label" x="14" y="24">api.example.com</text>
+         <text class="caption" x="14" y="44">sees exit IP only</text>
+         <text class="caption" x="14" y="62">no link to user</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- Inter-node arrows -->
+  <g>
+    <!-- T1 chain -->
+    <path class="arrow" d="M 180 250 H 230"  marker-end="url(#arr)"/>
+    <path class="arrow" d="M 390 250 H 460"  marker-end="url(#arr)"/>
+    <path class="arrow" d="M 620 250 H 690"  marker-end="url(#arr)"/>
+    <path class="arrow" d="M 850 250 H 920"  marker-end="url(#arr)"/>
+    <!-- T2 chain -->
+    <path class="arrow-strong" d="M 180 440 H 230" marker-end="url(#arr-i)"/>
+    <path class="arrow-strong" d="M 390 440 H 460" marker-end="url(#arr-i)"/>
+    <path class="arrow-strong" d="M 620 440 H 690" marker-end="url(#arr-i)"/>
+    <path class="arrow-strong" d="M 850 440 H 920" marker-end="url(#arr-i)"/>
+    <!-- T3 chain -->
+    <path class="arrow-strong" d="M 180 630 H 230" marker-end="url(#arr-i)"/>
+    <path class="arrow-strong" d="M 390 630 H 460" marker-end="url(#arr-i)"/>
+    <path class="arrow-strong" d="M 620 630 H 690" marker-end="url(#arr-i)"/>
+    <path class="arrow-strong" d="M 850 630 H 920" marker-end="url(#arr-i)"/>
+  </g>
+
+  <!-- Footer legend -->
+  <g transform="translate(40, 715)">
+    <rect x="0" y="-12" width="14" height="14" rx="3" fill="#ecfdf5" stroke="#059669"/>
+    <text class="caption" x="22" y="0">device-side (trusted)</text>
+
+    <rect x="180" y="-12" width="14" height="14" rx="3" fill="#fff7ed" stroke="#ea580c"/>
+    <text class="caption" x="202" y="0">target server (untrusted)</text>
+
+    <rect x="380" y="-12" width="14" height="14" rx="3" class="tier1"/>
+    <text class="caption" x="402" y="0">Tier 1: DoH</text>
+
+    <rect x="500" y="-12" width="14" height="14" rx="3" class="tier2"/>
+    <text class="caption" x="522" y="0">Tier 2: OHTTP capsule</text>
+
+    <rect x="680" y="-12" width="14" height="14" rx="3" class="tier3"/>
+    <text class="caption" x="702" y="0">Tier 3: Tor circuit</text>
+
+    <text class="caption" x="860" y="0" fill="#475569">All tiers stack on top of certificate pinning (SHA-256 SPKI / leaf cert).</text>
+  </g>
+</svg>

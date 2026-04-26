@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 600" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-labelledby="title desc">
+  <title id="title">XChaCha20-Poly1305 AEAD ciphertext layout</title>
+  <desc id="desc">Byte layout of an AEAD ciphertext as produced by crypto::aead::encrypt: 24-byte nonce, ciphertext, 16-byte Poly1305 tag.</desc>
+
+  <defs>
+    <style>
+      .bg { fill: #ffffff; }
+      .title { fill: #0f172a; font-size: 26px; font-weight: 700; }
+      .subtitle { fill: #475569; font-size: 14px; }
+      .section { fill: #0f172a; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+      .label { fill: #0f172a; font-size: 14px; font-weight: 600; }
+      .body { fill: #334155; font-size: 13px; }
+      .mono { font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, monospace; font-size: 12.5px; fill: #0f172a; }
+      .caption { fill: #64748b; font-size: 11.5px; }
+
+      .nonce { fill: #fef3c7; stroke: #f59e0b; stroke-width: 1.6; }
+      .ct    { fill: #ede9fe; stroke: #8b5cf6; stroke-width: 1.6; }
+      .tag   { fill: #fee2e2; stroke: #dc2626; stroke-width: 1.6; }
+      .key   { fill: #ecfdf5; stroke: #059669; stroke-width: 1.6; }
+      .aad   { fill: #fff7ed; stroke: #ea580c; stroke-width: 1.6; }
+      .panel { fill: #f8fafc; stroke: #e2e8f0; stroke-width: 1; }
+
+      .arrow { fill: none; stroke: #475569; stroke-width: 1.6; }
+    </style>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1180" height="600"/>
+
+  <text class="title" x="40" y="56">XChaCha20-Poly1305 — Ciphertext Layout</text>
+  <text class="subtitle" x="40" y="80">crypto::aead::encrypt returns a single Vec&lt;u8&gt;: nonce || ciphertext || Poly1305 tag. Callers don't manage nonces.</text>
+
+  <!-- Inputs row -->
+  <g transform="translate(40, 130)">
+    <text class="section" x="0" y="0">Inputs to encrypt(key, plaintext, aad)</text>
+    <g transform="translate(0, 24)">
+      <rect class="key"   x="0"   y="0" width="240" height="64" rx="10"/>
+      <text class="label" x="14"  y="24">key — VaultKey · 32 B</text>
+      <text class="caption" x="14" y="44">256-bit XChaCha20 key</text>
+
+      <rect class="aad"   x="260" y="0" width="240" height="64" rx="10"/>
+      <text class="label" x="274" y="24">aad — context bytes</text>
+      <text class="caption" x="274" y="44">e.g. "ps:sync:v2" || sid || ctr</text>
+
+      <rect class="panel" x="520" y="0" width="240" height="64" rx="10"/>
+      <text class="label" x="534" y="24">plaintext — bytes</text>
+      <text class="caption" x="534" y="44">caller’s message buffer</text>
+
+      <rect class="key"   x="780" y="0" width="320" height="64" rx="10"/>
+      <text class="label" x="794" y="24">nonce — 24 B random (internal)</text>
+      <text class="caption" x="794" y="44">fill_random::&lt;24&gt;()  ·  192-bit space</text>
+    </g>
+  </g>
+
+  <!-- Output ribbon -->
+  <g transform="translate(40, 270)">
+    <text class="section" x="0" y="0">Output bytes (returned by encrypt)</text>
+
+    <g transform="translate(0, 30)">
+      <rect class="nonce" x="0"   y="0" width="200" height="100" rx="8"/>
+      <text class="label" x="100" y="38" text-anchor="middle">Nonce</text>
+      <text class="caption" x="100" y="58" text-anchor="middle">24 bytes (192 bits)</text>
+      <text class="caption" x="100" y="76" text-anchor="middle">prepended on encrypt</text>
+
+      <rect class="ct"    x="210" y="0" width="700" height="100" rx="8"/>
+      <text class="label" x="560" y="38" text-anchor="middle">Ciphertext</text>
+      <text class="caption" x="560" y="58" text-anchor="middle">XChaCha20 keystream-XOR of plaintext</text>
+      <text class="caption" x="560" y="76" text-anchor="middle">same length as plaintext</text>
+
+      <rect class="tag"   x="920" y="0" width="180" height="100" rx="8"/>
+      <text class="label" x="1010" y="38" text-anchor="middle">Tag</text>
+      <text class="caption" x="1010" y="58" text-anchor="middle">Poly1305 · 16 bytes</text>
+      <text class="caption" x="1010" y="76" text-anchor="middle">authenticates ct + aad</text>
+    </g>
+
+    <!-- ruler -->
+    <g transform="translate(0, 145)">
+      <line class="arrow" x1="0" y1="0" x2="1100" y2="0"/>
+      <text class="caption" x="0" y="16">0</text>
+      <text class="caption" x="200" y="16">24</text>
+      <text class="caption" x="908" y="16">N + 24</text>
+      <text class="caption" x="1100" y="16" text-anchor="end">N + 40</text>
+    </g>
+    <text class="caption" x="0" y="180">For plaintext length N, the encoded form is exactly N + 40 bytes. MIN_CIPHERTEXT_LEN = 40 (nonce + tag, no plaintext).</text>
+  </g>
+
+  <!-- Notes panel -->
+  <g transform="translate(40, 480)">
+    <text class="section" x="0" y="0">Why this layout</text>
+    <g transform="translate(0, 24)">
+      <rect class="panel" x="0"   y="0" width="350" height="80" rx="10"/>
+      <text class="label" x="14" y="22">192-bit nonce</text>
+      <text class="caption" x="14" y="42">random nonces are safe to billions of calls;</text>
+      <text class="caption" x="14" y="58">the SDK never reuses a (key, nonce) pair.</text>
+
+      <rect class="panel" x="370" y="0" width="350" height="80" rx="10"/>
+      <text class="label" x="384" y="22">Context-binding via AAD</text>
+      <text class="caption" x="384" y="42">callers bind row id, doc type, etc. AAD</text>
+      <text class="caption" x="384" y="58">prevents ciphertext relocation attacks.</text>
+
+      <rect class="panel" x="740" y="0" width="360" height="80" rx="10"/>
+      <text class="label" x="754" y="22">Single failure mode on decrypt</text>
+      <text class="caption" x="754" y="42">CryptoError::Decryption covers wrong key,</text>
+      <text class="caption" x="754" y="58">tampered ct, tampered AAD, short input.</text>
+    </g>
+  </g>
+</svg>

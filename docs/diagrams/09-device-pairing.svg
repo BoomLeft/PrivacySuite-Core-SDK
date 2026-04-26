@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 760" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-labelledby="title desc">
+  <title id="title">Device pairing — X25519 ECDH via QR code</title>
+  <desc id="desc">Two devices establish a shared VaultKey via X25519 key agreement. Public keys flow through a QR code (out-of-band channel). Low-order points are rejected.</desc>
+
+  <defs>
+    <style>
+      .bg { fill: #ffffff; }
+      .title { fill: #0f172a; font-size: 26px; font-weight: 700; }
+      .subtitle { fill: #475569; font-size: 14px; }
+      .section { fill: #0f172a; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+      .label { fill: #0f172a; font-size: 14px; font-weight: 600; }
+      .body { fill: #334155; font-size: 13px; }
+      .mono { font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, monospace; font-size: 12px; fill: #0f172a; }
+      .caption { fill: #64748b; font-size: 11.5px; }
+
+      .device  { fill: #ecfdf5; stroke: #059669; stroke-width: 1.8; }
+      .secret  { fill: #fef2f2; stroke: #dc2626; stroke-width: 1.6; }
+      .public  { fill: #dbeafe; stroke: #3b82f6; stroke-width: 1.6; }
+      .shared  { fill: #fffbeb; stroke: #f59e0b; stroke-width: 1.6; }
+      .key     { fill: #ecfdf5; stroke: #10b981; stroke-width: 1.8; }
+      .qr      { fill: #f8fafc; stroke: #0f172a; stroke-width: 1.4; }
+      .panel   { fill: #f8fafc; stroke: #e2e8f0; stroke-width: 1; }
+      .err     { fill: #fef2f2; stroke: #dc2626; stroke-width: 1.4; }
+
+      .arr { fill: none; stroke: #475569; stroke-width: 1.6; }
+      .arr-strong { fill: none; stroke: #4f46e5; stroke-width: 2; }
+    </style>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="arr-i" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4f46e5"/>
+    </marker>
+    <pattern id="qrpattern" x="0" y="0" width="10" height="10" patternUnits="userSpaceOnUse">
+      <rect width="10" height="10" fill="#ffffff"/>
+      <rect width="5" height="5" fill="#0f172a"/>
+      <rect x="5" y="5" width="5" height="5" fill="#0f172a"/>
+    </pattern>
+  </defs>
+
+  <rect class="bg" width="1180" height="760"/>
+
+  <text class="title" x="40" y="56">Device Pairing — X25519 over QR</text>
+  <text class="subtitle" x="40" y="80">Out-of-band public-key exchange with low-order-point rejection. Same primitive used by Signal Sealed Sender and WireGuard.</text>
+
+  <!-- Device A -->
+  <g transform="translate(40, 130)">
+    <rect class="device" width="320" height="320" rx="14"/>
+    <text class="label" x="20" y="32" fill="#059669">Device A — primary</text>
+
+    <g transform="translate(20, 56)">
+      <rect class="secret" width="280" height="64" rx="10"/>
+      <text class="label" x="14" y="24">Ephemeral secret  sk_A</text>
+      <text class="caption" x="14" y="44">x25519_dalek::StaticSecret · OsRng · zeroized on drop</text>
+    </g>
+
+    <g transform="translate(20, 132)">
+      <rect class="public" width="280" height="64" rx="10"/>
+      <text class="label" x="14" y="24">Public key  pk_A = sk_A · G</text>
+      <text class="caption" x="14" y="44">32 bytes · base64-encoded for QR</text>
+    </g>
+
+    <g transform="translate(20, 208)">
+      <rect class="shared" width="280" height="48" rx="10"/>
+      <text class="mono" x="14" y="20">shared = ECDH(sk_A, pk_B)</text>
+      <text class="caption" x="14" y="38">low-order points rejected ⇒ CryptoError</text>
+    </g>
+
+    <g transform="translate(20, 264)">
+      <rect class="key" width="280" height="44" rx="10"/>
+      <text class="mono" x="14" y="20">VaultKey = blake3_derive(ctx, shared)</text>
+      <text class="caption" x="14" y="36">ctx = "ps:pair:v1"</text>
+    </g>
+  </g>
+
+  <!-- QR code (out of band) -->
+  <g transform="translate(440, 230)">
+    <rect class="panel" width="300" height="180" rx="14"/>
+    <text class="section" x="20" y="26">Out-of-band channel · QR code</text>
+
+    <rect x="40" y="50" width="100" height="100" fill="url(#qrpattern)" stroke="#0f172a" stroke-width="1"/>
+    <text class="caption" x="160" y="74">user scans QR with the</text>
+    <text class="caption" x="160" y="92">other device · cannot be</text>
+    <text class="caption" x="160" y="110">forged on the network</text>
+    <text class="caption" x="160" y="138" font-weight="600">payload: base64(pk_X)</text>
+  </g>
+
+  <!-- Device B -->
+  <g transform="translate(820, 130)">
+    <rect class="device" width="320" height="320" rx="14"/>
+    <text class="label" x="20" y="32" fill="#059669">Device B — pairing</text>
+
+    <g transform="translate(20, 56)">
+      <rect class="secret" width="280" height="64" rx="10"/>
+      <text class="label" x="14" y="24">Ephemeral secret  sk_B</text>
+      <text class="caption" x="14" y="44">x25519_dalek::StaticSecret · OsRng</text>
+    </g>
+
+    <g transform="translate(20, 132)">
+      <rect class="public" width="280" height="64" rx="10"/>
+      <text class="label" x="14" y="24">Public key  pk_B = sk_B · G</text>
+      <text class="caption" x="14" y="44">scanned by Device A from QR</text>
+    </g>
+
+    <g transform="translate(20, 208)">
+      <rect class="shared" width="280" height="48" rx="10"/>
+      <text class="mono" x="14" y="20">shared = ECDH(sk_B, pk_A)</text>
+      <text class="caption" x="14" y="38">same 32-byte secret as Device A</text>
+    </g>
+
+    <g transform="translate(20, 264)">
+      <rect class="key" width="280" height="44" rx="10"/>
+      <text class="mono" x="14" y="20">VaultKey = blake3_derive(ctx, shared)</text>
+      <text class="caption" x="14" y="36">deterministically equal across devices</text>
+    </g>
+  </g>
+
+  <!-- arrows: pk exchange -->
+  <path class="arr-strong" d="M 360 320 H 440" marker-end="url(#arr-i)"/>
+  <path class="arr-strong" d="M 820 320 H 740" marker-end="url(#arr-i)"/>
+
+  <!-- Signing follow-up -->
+  <g transform="translate(40, 480)">
+    <text class="section" x="0" y="0">After pairing — Ed25519 signed message channel</text>
+    <g transform="translate(0, 26)">
+      <rect class="panel" width="540" height="160" rx="10"/>
+      <text class="caption" x="14" y="22" fill="#0f172a" font-weight="600">SigningKeypair (long-lived)</text>
+      <text class="mono" x="14" y="44">sign(priv, msg) → 64-byte Ed25519 signature</text>
+      <text class="mono" x="14" y="62">verify(pub, msg, sig) → bool</text>
+      <text class="caption" x="14" y="86" fill="#0f172a" font-weight="600">Use cases</text>
+      <text class="caption" x="14" y="104">• signed pairing-confirmation messages</text>
+      <text class="caption" x="14" y="122">• device-attested CRDT operations</text>
+      <text class="caption" x="14" y="140">• signed sync-mode upgrade requests</text>
+    </g>
+  </g>
+
+  <!-- Defenses panel -->
+  <g transform="translate(620, 480)">
+    <text class="section" x="0" y="0">Defenses</text>
+    <g transform="translate(0, 26)">
+      <rect class="err" width="520" height="160" rx="10"/>
+      <text class="label" x="14" y="22" fill="#0f172a">Low-order point rejection</text>
+      <text class="caption" x="14" y="42">8 small-subgroup points produce a zero / predictable</text>
+      <text class="caption" x="14" y="58">shared secret. compute_shared_secret rejects them.</text>
+      <text class="caption" x="14" y="78">References: CVE-2020-12607, RFC 7748 §6.1.</text>
+
+      <text class="label" x="14" y="106" fill="#0f172a">Forward secrecy</text>
+      <text class="caption" x="14" y="126">Ephemeral keys are zeroized on drop. A session-key</text>
+      <text class="caption" x="14" y="142">capture cannot reveal past or future shared secrets.</text>
+    </g>
+  </g>
+
+  <!-- footer -->
+  <g transform="translate(40, 720)">
+    <text class="caption" x="0" y="0">Module: privacysuite-core-sdk::crypto::pairing — see EphemeralKeypair / SharedSecret / SigningKeypair.</text>
+  </g>
+</svg>

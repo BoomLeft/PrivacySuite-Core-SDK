@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 720" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-labelledby="title desc">
+  <title id="title">Zero-knowledge data residency</title>
+  <desc id="desc">Where plaintext data exists across the system. Plaintext lives only on the user's device. Servers, sync relays, and disk storage hold only ciphertext.</desc>
+
+  <defs>
+    <style>
+      .bg { fill: #ffffff; }
+      .title { fill: #0f172a; font-size: 26px; font-weight: 700; }
+      .subtitle { fill: #475569; font-size: 14px; }
+      .section { fill: #0f172a; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+      .label { fill: #0f172a; font-size: 14px; font-weight: 600; }
+      .body { fill: #334155; font-size: 13px; }
+      .mono { font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, monospace; font-size: 12px; fill: #0f172a; }
+      .caption { fill: #64748b; font-size: 11.5px; }
+
+      .device-trust { fill: #ecfdf5; stroke: #059669; stroke-width: 2; }
+      .device-mem   { fill: #ffffff; stroke: #10b981; stroke-width: 1.5; }
+      .device-disk  { fill: #fffbeb; stroke: #f59e0b; stroke-width: 1.5; }
+      .net          { fill: #eef2ff; stroke: #4f46e5; stroke-width: 1.5; }
+      .untrusted    { fill: #fff1f2; stroke: #be123c; stroke-width: 1.5; }
+      .legend-plain { fill: #ecfdf5; stroke: #059669; }
+      .legend-ct    { fill: #fef3c7; stroke: #f59e0b; }
+
+      .arrow { fill: none; stroke: #475569; stroke-width: 1.6; }
+      .arrow-cipher { fill: none; stroke: #4f46e5; stroke-width: 2.4; }
+    </style>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="arr-i" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4f46e5"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1180" height="720"/>
+
+  <text class="title" x="40" y="56">Zero-Knowledge Data Residency</text>
+  <text class="subtitle" x="40" y="80">Where does plaintext live? Only inside the device-trust boundary, and only while the user is operating on it.</text>
+
+  <!-- Trust boundary: User device -->
+  <g transform="translate(40, 130)">
+    <rect class="device-trust" width="540" height="500" rx="16"/>
+    <text class="section" x="20" y="32" fill="#059669">User device  ·  trust boundary</text>
+    <text class="caption" x="20" y="52">where plaintext is allowed to exist</text>
+
+    <!-- In-memory plaintext zone -->
+    <g transform="translate(20, 72)">
+      <rect class="device-mem" width="500" height="200" rx="12"/>
+      <text class="label" x="14" y="26">In-memory plaintext</text>
+      <text class="caption" x="14" y="44">held only while operations are in flight</text>
+
+      <g transform="translate(14, 60)">
+        <rect class="legend-plain" width="220" height="46" rx="8"/>
+        <text class="body" x="12" y="20">Decrypted blobs</text>
+        <text class="caption" x="12" y="36">Vec&lt;u8&gt; · caller zeroizes</text>
+      </g>
+
+      <g transform="translate(248, 60)">
+        <rect class="legend-plain" width="234" height="46" rx="8"/>
+        <text class="body" x="12" y="20">Automerge AutoCommit</text>
+        <text class="caption" x="12" y="36">live CRDT in RAM</text>
+      </g>
+
+      <g transform="translate(14, 116)">
+        <rect class="legend-plain" width="220" height="46" rx="8"/>
+        <text class="body" x="12" y="20">VaultKey · SessionKey</text>
+        <text class="caption" x="12" y="36">Zeroize + ZeroizeOnDrop</text>
+      </g>
+
+      <g transform="translate(248, 116)">
+        <rect class="legend-plain" width="234" height="46" rx="8"/>
+        <text class="body" x="12" y="20">User passphrase</text>
+        <text class="caption" x="12" y="36">UTF-8 bytes · ZeroizingPassword</text>
+      </g>
+    </g>
+
+    <!-- On-disk encrypted zone -->
+    <g transform="translate(20, 290)">
+      <rect class="device-disk" width="500" height="190" rx="12"/>
+      <text class="label" x="14" y="26">On-disk · always encrypted</text>
+      <text class="caption" x="14" y="44">files indistinguishable from random data without VaultKey</text>
+
+      <g transform="translate(14, 60)">
+        <rect class="legend-ct" width="220" height="48" rx="8"/>
+        <text class="body" x="12" y="20">SQLCipher database</text>
+        <text class="caption" x="12" y="36">cipher_memory_security ON</text>
+      </g>
+
+      <g transform="translate(248, 60)">
+        <rect class="legend-ct" width="234" height="48" rx="8"/>
+        <text class="body" x="12" y="20">CRDT save_encrypted blobs</text>
+        <text class="caption" x="12" y="36">XChaCha20-Poly1305 · 16 MiB cap</text>
+      </g>
+
+      <g transform="translate(14, 118)">
+        <rect class="legend-ct" width="220" height="48" rx="8"/>
+        <text class="body" x="12" y="20">OPAQUE envelope</text>
+        <text class="caption" x="12" y="36">no password recoverable</text>
+      </g>
+
+      <g transform="translate(248, 118)">
+        <rect class="legend-ct" width="234" height="48" rx="8"/>
+        <text class="body" x="12" y="20">Salt · BIP39 mnemonic</text>
+        <text class="caption" x="12" y="36">non-secret salt; recovery offline</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- Network in the middle -->
+  <g transform="translate(620, 200)">
+    <rect class="net" width="180" height="380" rx="14"/>
+    <text class="section" x="20" y="28" fill="#4f46e5">Network</text>
+    <text class="caption" x="20" y="48">only ciphertext on the wire</text>
+
+    <g transform="translate(20, 80)">
+      <rect class="legend-ct" width="140" height="46" rx="8"/>
+      <text class="body" x="12" y="20">AEAD frames</text>
+      <text class="caption" x="12" y="36">v2 sync framing</text>
+    </g>
+    <g transform="translate(20, 142)">
+      <rect class="legend-ct" width="140" height="46" rx="8"/>
+      <text class="body" x="12" y="20">OPAQUE messages</text>
+      <text class="caption" x="12" y="36">no password</text>
+    </g>
+    <g transform="translate(20, 204)">
+      <rect class="legend-ct" width="140" height="46" rx="8"/>
+      <text class="body" x="12" y="20">OHTTP capsules</text>
+      <text class="caption" x="12" y="36">opaque to relay</text>
+    </g>
+    <g transform="translate(20, 266)">
+      <rect class="legend-ct" width="140" height="46" rx="8"/>
+      <text class="body" x="12" y="20">CRDT sync deltas</text>
+      <text class="caption" x="12" y="36">opaque to relay</text>
+    </g>
+    <g transform="translate(20, 328)">
+      <rect class="legend-plain" width="140" height="36" rx="8"/>
+      <text class="caption" x="12" y="22">+ no telemetry · ever</text>
+    </g>
+  </g>
+
+  <!-- Untrusted side: server -->
+  <g transform="translate(840, 130)">
+    <rect class="untrusted" width="300" height="500" rx="16"/>
+    <text class="section" x="20" y="32" fill="#be123c">BoomLeft relay / OPAQUE server</text>
+    <text class="caption" x="20" y="52">treated as untrusted by design</text>
+
+    <g transform="translate(20, 80)">
+      <rect class="legend-ct" width="260" height="60" rx="10"/>
+      <text class="body" x="14" y="22">Stored: opaque ciphertext blobs</text>
+      <text class="caption" x="14" y="42">cannot decrypt — no VaultKey</text>
+    </g>
+
+    <g transform="translate(20, 156)">
+      <rect class="legend-ct" width="260" height="60" rx="10"/>
+      <text class="body" x="14" y="22">Stored: OPAQUE password file</text>
+      <text class="caption" x="14" y="42">no replay value if leaked</text>
+    </g>
+
+    <g transform="translate(20, 232)">
+      <rect class="legend-ct" width="260" height="60" rx="10"/>
+      <text class="body" x="14" y="22">Logs: relay-routing only</text>
+      <text class="caption" x="14" y="42">no message content</text>
+    </g>
+
+    <g transform="translate(20, 308)">
+      <rect class="legend-ct" width="260" height="60" rx="10"/>
+      <text class="body" x="14" y="22">Subpoena disclosure: nothing</text>
+      <text class="caption" x="14" y="42">equivalent to Signal’s posture</text>
+    </g>
+
+    <g transform="translate(20, 396)">
+      <rect class="legend-plain" width="260" height="74" rx="10"/>
+      <text class="body" x="14" y="22">No analytics. No crash reports.</text>
+      <text class="caption" x="14" y="42">deny.toml blocks sentry / datadog /</text>
+      <text class="caption" x="14" y="58">bugsnag / opentelemetry / prometheus</text>
+    </g>
+  </g>
+
+  <!-- arrows -->
+  <g>
+    <path class="arrow-cipher" d="M 580 380 H 620" marker-end="url(#arr-i)"/>
+    <path class="arrow-cipher" d="M 800 380 H 840" marker-end="url(#arr-i)"/>
+  </g>
+
+  <!-- Footer legend -->
+  <g transform="translate(40, 670)">
+    <rect x="0"   y="-10" width="14" height="14" rx="3" class="legend-plain"/>
+    <text class="caption" x="22" y="0">plaintext · device-only</text>
+
+    <rect x="200" y="-10" width="14" height="14" rx="3" class="legend-ct"/>
+    <text class="caption" x="222" y="0">ciphertext · safe to transmit / persist</text>
+
+    <text class="caption" x="500" y="0" fill="#475569">If a server is fully compromised today, no plaintext leaks — guaranteed by construction, not policy.</text>
+  </g>
+</svg>

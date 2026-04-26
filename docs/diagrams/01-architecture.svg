@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 760" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-labelledby="title desc">
+  <title id="title">PrivacySuite Core SDK — Three-Crate Architecture</title>
+  <desc id="desc">A pure-Rust core crate, wrapped by a Tauri 2.x desktop plugin and a UniFFI mobile bindings crate. Raw key bytes never cross the IPC, JNI, or FFI boundary.</desc>
+
+  <defs>
+    <style>
+      .bg { fill: #ffffff; }
+      .title { fill: #0f172a; font-size: 26px; font-weight: 700; }
+      .subtitle { fill: #475569; font-size: 14px; }
+      .section { fill: #0f172a; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+      .label { fill: #0f172a; font-size: 14px; font-weight: 600; }
+      .body { fill: #334155; font-size: 13px; }
+      .mono { font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, monospace; font-size: 12.5px; fill: #0f172a; }
+      .caption { fill: #64748b; font-size: 11.5px; }
+      .pill { fill: #ffffff; stroke: #e2e8f0; }
+      .core-fill { fill: #eef2ff; stroke: #4f46e5; stroke-width: 2; }
+      .wrap-fill { fill: #f8fafc; stroke: #94a3b8; stroke-width: 1.5; }
+      .platform-fill { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
+      .feature-fill { fill: #ffffff; stroke: #c7d2fe; }
+      .accent { fill: #4f46e5; }
+      .ok { fill: #059669; }
+      .warn { fill: #dc2626; }
+      .arrow { fill: none; stroke: #475569; stroke-width: 1.6; }
+      .arrow-secure { fill: none; stroke: #059669; stroke-width: 1.8; stroke-dasharray: 6 4; }
+      .divider { stroke: #e2e8f0; stroke-width: 1; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#059669"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1180" height="760"/>
+
+  <!-- Header -->
+  <text class="title" x="40" y="56">PrivacySuite Core SDK — Workspace Architecture</text>
+  <text class="subtitle" x="40" y="80">Pure-Rust core crate, wrapped by thin desktop and mobile shells. Raw key bytes never cross the IPC / JNI / FFI boundary.</text>
+
+  <!-- Core crate (centerpiece) -->
+  <g transform="translate(280, 130)">
+    <rect class="core-fill" width="620" height="380" rx="14"/>
+    <text class="section" x="20" y="30" fill="#4f46e5">Core crate · privacysuite-core-sdk</text>
+    <text class="caption" x="20" y="48">#![deny(unsafe_code)]   #![deny(warnings)]   no Tauri / no FFI</text>
+
+    <!-- module grid -->
+    <g transform="translate(20, 70)">
+      <!-- row 1 -->
+      <g>
+        <rect class="feature-fill" x="0" y="0" width="180" height="62" rx="8"/>
+        <text class="label" x="14" y="22">crypto</text>
+        <text class="caption" x="14" y="40">AEAD · Argon2id · BIP39</text>
+        <text class="caption" x="14" y="55">BLAKE3 · HKDF · X25519/Ed25519</text>
+      </g>
+      <g transform="translate(195, 0)">
+        <rect class="feature-fill" width="180" height="62" rx="8"/>
+        <text class="label" x="14" y="22">auth</text>
+        <text class="caption" x="14" y="40">OPAQUE aPAKE (RFC 9807)</text>
+        <text class="caption" x="14" y="55">PIN-lock · zeroizing keys</text>
+      </g>
+      <g transform="translate(390, 0)">
+        <rect class="feature-fill" width="190" height="62" rx="8"/>
+        <text class="label" x="14" y="22">storage</text>
+        <text class="caption" x="14" y="40">SQLCipher (bundled)</text>
+        <text class="caption" x="14" y="55">cipher_memory_security ON</text>
+      </g>
+
+      <!-- row 2 -->
+      <g transform="translate(0, 78)">
+        <rect class="feature-fill" width="180" height="62" rx="8"/>
+        <text class="label" x="14" y="22">crdt</text>
+        <text class="caption" x="14" y="40">Automerge documents</text>
+        <text class="caption" x="14" y="55">E2EE save / load</text>
+      </g>
+      <g transform="translate(195, 78)">
+        <rect class="feature-fill" width="180" height="62" rx="8"/>
+        <text class="label" x="14" y="22">sync</text>
+        <text class="caption" x="14" y="40">WebSocket relay · v2 framing</text>
+        <text class="caption" x="14" y="55">replay-bound · pin-checked TLS</text>
+      </g>
+      <g transform="translate(390, 78)">
+        <rect class="feature-fill" width="190" height="62" rx="8"/>
+        <text class="label" x="14" y="22">networking</text>
+        <text class="caption" x="14" y="40">DoH · OHTTP · Tor SOCKS5</text>
+        <text class="caption" x="14" y="55">SSRF-filtered DNS</text>
+      </g>
+
+      <!-- row 3 -->
+      <g transform="translate(0, 156)">
+        <rect class="feature-fill" width="180" height="62" rx="8"/>
+        <text class="label" x="14" y="22">privacy_utils</text>
+        <text class="caption" x="14" y="40">URL tracker stripping</text>
+        <text class="caption" x="14" y="55">100+ params · case-fold safe</text>
+      </g>
+      <g transform="translate(195, 156)">
+        <rect class="feature-fill" width="180" height="62" rx="8"/>
+        <text class="label" x="14" y="22">keystore  (Android)</text>
+        <text class="caption" x="14" y="40">StrongBox-backed VaultKey</text>
+        <text class="caption" x="14" y="55">single audited unsafe site</text>
+      </g>
+      <g transform="translate(390, 156)">
+        <rect class="feature-fill" width="190" height="62" rx="8"/>
+        <text class="label" x="14" y="22">error · logging</text>
+        <text class="caption" x="14" y="40">unified opaque CryptoError</text>
+        <text class="caption" x="14" y="55">zero-log-traffic posture</text>
+      </g>
+    </g>
+
+    <!-- bottom strip: invariants -->
+    <g transform="translate(20, 320)">
+      <rect x="0" y="0" width="580" height="42" rx="6" fill="#ffffff" stroke="#c7d2fe"/>
+      <text class="caption" x="14" y="18" fill="#0f172a" font-weight="600">Invariants enforced once, used everywhere:</text>
+      <text class="caption" x="14" y="34">All randomness → fill_random · all KDF → blake3_derive · all Argon2 → one private helper · zeroize on every secret</text>
+    </g>
+  </g>
+
+  <!-- Desktop wrapper -->
+  <g transform="translate(40, 200)">
+    <rect class="wrap-fill" width="220" height="240" rx="12"/>
+    <text class="section" x="16" y="28">Desktop wrapper</text>
+    <text class="label" x="16" y="56">tauri-plugin-privacysuite</text>
+    <text class="caption" x="16" y="76">Tauri 2.x plugin</text>
+    <line class="divider" x1="16" y1="92" x2="204" y2="92"/>
+    <text class="body" x="16" y="114">commands.rs</text>
+    <text class="caption" x="16" y="132">IPC: KeyHandle, EncryptedBlob</text>
+    <text class="body" x="16" y="158">models.rs</text>
+    <text class="caption" x="16" y="176">Serde IPC types</text>
+    <text class="caption" x="16" y="206" fill="#059669" font-weight="600">✓ raw keys never cross IPC</text>
+  </g>
+
+  <!-- Mobile wrapper -->
+  <g transform="translate(920, 200)">
+    <rect class="wrap-fill" width="220" height="240" rx="12"/>
+    <text class="section" x="16" y="28">Mobile wrapper</text>
+    <text class="label" x="16" y="56">privacysuite-ffi</text>
+    <text class="caption" x="16" y="76">UniFFI bindings</text>
+    <line class="divider" x1="16" y1="92" x2="204" y2="92"/>
+    <text class="body" x="16" y="114">Opaque Arc&lt;Handle&gt;</text>
+    <text class="caption" x="16" y="132">Kotlin · Swift surfaces</text>
+    <text class="body" x="16" y="158">Bytes stay on Rust heap</text>
+    <text class="caption" x="16" y="176">no JNI/Obj-C key transit</text>
+    <text class="caption" x="16" y="206" fill="#059669" font-weight="600">✓ raw keys never cross JNI/FFI</text>
+  </g>
+
+  <!-- Connection arrows -->
+  <path class="arrow-secure" d="M 260 320 H 280" marker-end="url(#arrow-green)"/>
+  <path class="arrow-secure" d="M 920 320 H 900" marker-end="url(#arrow-green)"/>
+
+  <!-- Platforms strip -->
+  <g transform="translate(40, 565)">
+    <text class="section" x="0" y="0">Platforms reached</text>
+    <g transform="translate(0, 18)">
+      <rect class="platform-fill" x="0"   y="0" width="170" height="60" rx="10"/>
+      <text class="label" x="16" y="24">macOS · Windows · Linux</text>
+      <text class="caption" x="16" y="44">via Tauri plugin</text>
+
+      <rect class="platform-fill" x="190" y="0" width="170" height="60" rx="10"/>
+      <text class="label" x="206" y="24">Android (Kotlin)</text>
+      <text class="caption" x="206" y="44">cargo-ndk · UniFFI</text>
+
+      <rect class="platform-fill" x="380" y="0" width="170" height="60" rx="10"/>
+      <text class="label" x="396" y="24">iOS · iPadOS (Swift)</text>
+      <text class="caption" x="396" y="44">Xcode · UniFFI</text>
+
+      <rect class="platform-fill" x="570" y="0" width="170" height="60" rx="10"/>
+      <text class="label" x="586" y="24">Pure-Rust apps</text>
+      <text class="caption" x="586" y="44">direct dependency</text>
+
+      <g transform="translate(770, 0)">
+        <rect class="pill" width="330" height="60" rx="10"/>
+        <text class="label" x="16" y="24">Same audited core, every platform</text>
+        <text class="caption" x="16" y="44">supply chain pinned via cargo-deny</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- Legend -->
+  <g transform="translate(40, 685)">
+    <line class="arrow-secure" x1="0" y1="6" x2="32" y2="6" marker-end="url(#arrow-green)"/>
+    <text class="caption" x="40" y="10">opaque handle hand-off — no key bytes</text>
+
+    <rect x="320" y="-2" width="14" height="14" rx="3" class="feature-fill"/>
+    <text class="caption" x="342" y="10">core module (feature-gated)</text>
+
+    <rect x="560" y="-2" width="14" height="14" rx="3" class="wrap-fill"/>
+    <text class="caption" x="582" y="10">platform wrapper crate</text>
+
+    <text class="caption" x="800" y="10" fill="#475569">All cryptographic operations stay inside the core crate.</text>
+  </g>
+</svg>

@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 720" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-labelledby="title desc">
+  <title id="title">Vault key derivation pipeline</title>
+  <desc id="desc">User passphrase becomes a 256-bit VaultKey via Argon2id, then context-bound sub-keys are derived with BLAKE3 / HKDF for AEAD, storage, and sync.</desc>
+
+  <defs>
+    <style>
+      .bg { fill: #ffffff; }
+      .title { fill: #0f172a; font-size: 26px; font-weight: 700; }
+      .subtitle { fill: #475569; font-size: 14px; }
+      .section { fill: #0f172a; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+      .label { fill: #0f172a; font-size: 14px; font-weight: 600; }
+      .body { fill: #334155; font-size: 13px; }
+      .mono { font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, monospace; font-size: 12.5px; fill: #0f172a; }
+      .caption { fill: #64748b; font-size: 11.5px; }
+      .input { fill: #fffbeb; stroke: #f59e0b; stroke-width: 1.5; }
+      .kdf { fill: #eef2ff; stroke: #4f46e5; stroke-width: 2; }
+      .key { fill: #ecfdf5; stroke: #059669; stroke-width: 2; }
+      .subkey { fill: #ffffff; stroke: #10b981; stroke-width: 1.5; }
+      .salt { fill: #f0f9ff; stroke: #0284c7; stroke-width: 1.5; }
+      .arrow { fill: none; stroke: #475569; stroke-width: 1.8; }
+      .strong { fill: none; stroke: #4f46e5; stroke-width: 2.4; }
+      .green { fill: none; stroke: #059669; stroke-width: 2; }
+    </style>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="arr-i" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4f46e5"/>
+    </marker>
+    <marker id="arr-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#059669"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1180" height="720"/>
+
+  <text class="title" x="40" y="56">Vault Key Derivation Pipeline</text>
+  <text class="subtitle" x="40" y="80">A user passphrase becomes a 256-bit VaultKey via Argon2id, then BLAKE3 derive_key + HKDF-SHA256 produce context-bound sub-keys.</text>
+
+  <!-- Stage 1: Inputs -->
+  <g transform="translate(40, 130)">
+    <text class="section" x="0" y="0">1 · Inputs</text>
+
+    <g transform="translate(0, 22)">
+      <rect class="input" width="220" height="78" rx="10"/>
+      <text class="label" x="14" y="26">User passphrase</text>
+      <text class="caption" x="14" y="44">UTF-8 bytes · zeroized after use</text>
+      <text class="caption" x="14" y="60">empty input rejected fail-closed</text>
+    </g>
+
+    <g transform="translate(0, 124)">
+      <rect class="salt" width="220" height="78" rx="10"/>
+      <text class="label" x="14" y="26">Salt — 32 bytes</text>
+      <text class="caption" x="14" y="44">OS entropy via fill_random</text>
+      <text class="caption" x="14" y="60">stored alongside the vault</text>
+    </g>
+  </g>
+
+  <!-- Stage 2: Argon2id -->
+  <g transform="translate(330, 130)">
+    <text class="section" x="0" y="0">2 · Memory-hard KDF</text>
+    <g transform="translate(0, 22)">
+      <rect class="kdf" width="320" height="180" rx="12"/>
+      <text class="label" x="20" y="32" fill="#4f46e5">Argon2id</text>
+      <text class="caption" x="20" y="52">RustCrypto · single audited helper</text>
+
+      <g transform="translate(20, 70)">
+        <text class="mono" x="0" y="14">m = 64 MB     (memory cost)</text>
+        <text class="mono" x="0" y="34">t = 3         (iterations)</text>
+        <text class="mono" x="0" y="54">p = 4         (parallelism)</text>
+        <text class="mono" x="0" y="74">out = 32 B    (256-bit output)</text>
+      </g>
+
+      <text class="caption" x="20" y="166" fill="#475569">parameters hardcoded — no downgrade path</text>
+    </g>
+  </g>
+
+  <!-- Stage 3: VaultKey -->
+  <g transform="translate(740, 130)">
+    <text class="section" x="0" y="0">3 · Master VaultKey</text>
+    <g transform="translate(0, 22)">
+      <rect class="key" width="320" height="120" rx="12"/>
+      <text class="label" x="20" y="32" fill="#059669">VaultKey  ·  256 bits</text>
+      <text class="caption" x="20" y="52">Zeroize + ZeroizeOnDrop · ct_eq compare</text>
+      <text class="caption" x="20" y="70">Debug prints "VaultKey(***)" — never raw bytes</text>
+      <text class="caption" x="20" y="92">never crosses IPC / JNI / FFI boundary</text>
+      <text class="caption" x="20" y="108">on Android: optionally wrapped by StrongBox</text>
+    </g>
+  </g>
+
+  <!-- arrows from stage 1 to stage 2 -->
+  <path class="arrow" d="M 260 175 H 320" marker-end="url(#arr)"/>
+  <path class="arrow" d="M 260 269 C 290 269, 290 220, 320 220" marker-end="url(#arr)"/>
+
+  <!-- arrow from stage 2 to vaultkey -->
+  <path class="strong" d="M 650 220 H 730" marker-end="url(#arr-i)"/>
+
+  <!-- Stage 4: sub-key derivation -->
+  <g transform="translate(40, 360)">
+    <text class="section" x="0" y="0">4 · Context-bound sub-key derivation</text>
+    <text class="caption" x="0" y="20">crypto::kdf::blake3_derive(ctx, vault_key)  ·  crypto::hkdf::hkdf_sha256(ikm = vault_key, info = ctx)</text>
+
+    <!-- Bus from VaultKey -->
+    <g transform="translate(0, 50)">
+      <rect class="key" width="160" height="62" rx="10"/>
+      <text class="label" x="14" y="26" fill="#059669">VaultKey</text>
+      <text class="caption" x="14" y="44">master input keying material</text>
+    </g>
+
+    <!-- Sub-key cards -->
+    <g transform="translate(220, 40)">
+      <!-- AEAD -->
+      <g transform="translate(0, 0)">
+        <rect class="subkey" width="220" height="92" rx="10"/>
+        <text class="label" x="14" y="26">AEAD encryption key</text>
+        <text class="mono" x="14" y="48">ctx = "ps:aead:v1"</text>
+        <text class="caption" x="14" y="68">consumed by XChaCha20-Poly1305</text>
+        <text class="caption" x="14" y="84">192-bit random nonce per call</text>
+      </g>
+      <!-- Storage -->
+      <g transform="translate(240, 0)">
+        <rect class="subkey" width="220" height="92" rx="10"/>
+        <text class="label" x="14" y="26">SQLCipher PRAGMA key</text>
+        <text class="mono" x="14" y="48">ctx = "ps:storage:v1"</text>
+        <text class="caption" x="14" y="68">hex-encoded once · zeroized</text>
+        <text class="caption" x="14" y="84">cipher_memory_security ON</text>
+      </g>
+      <!-- Sync -->
+      <g transform="translate(480, 0)">
+        <rect class="subkey" width="220" height="92" rx="10"/>
+        <text class="label" x="14" y="26">Sync transport key</text>
+        <text class="mono" x="14" y="48">ctx = "ps:sync:v2"</text>
+        <text class="caption" x="14" y="68">XChaCha20-Poly1305 over relay</text>
+        <text class="caption" x="14" y="84">replay-bound · session-bound</text>
+      </g>
+      <!-- CRDT -->
+      <g transform="translate(720, 0)">
+        <rect class="subkey" width="220" height="92" rx="10"/>
+        <text class="label" x="14" y="26">CRDT blob key</text>
+        <text class="mono" x="14" y="48">ctx = "ps:crdt:v1"</text>
+        <text class="caption" x="14" y="68">Automerge save_encrypted</text>
+        <text class="caption" x="14" y="84">16 MiB blob cap</text>
+      </g>
+    </g>
+
+    <!-- bus arrows -->
+    <g>
+      <path class="green" d="M 160 80 H 200 V 86 H 220" marker-end="url(#arr-g)"/>
+      <path class="green" d="M 200 86 V 86 H 220" marker-end="url(#arr-g)" style="display:none"/>
+      <!-- vertical bus -->
+      <line class="green" x1="200" y1="80" x2="200" y2="86" />
+    </g>
+
+    <!-- distribution arrows -->
+    <g>
+      <path class="green" d="M 200 86 H 460" marker-end="url(#arr-g)" style="display:none"/>
+    </g>
+  </g>
+
+  <!-- Stage 5: Recovery path -->
+  <g transform="translate(40, 540)">
+    <text class="section" x="0" y="0">5 · Alternate root: BIP39 mnemonic recovery</text>
+    <g transform="translate(0, 20)">
+      <rect class="input" width="280" height="78" rx="10"/>
+      <text class="label" x="14" y="26">24-word BIP39 mnemonic</text>
+      <text class="caption" x="14" y="46">256 bits of entropy · constant-time wordlist</text>
+      <text class="caption" x="14" y="62">user-side recovery — never sent off device</text>
+    </g>
+
+    <g transform="translate(310, 20)">
+      <rect class="kdf" width="240" height="78" rx="10"/>
+      <text class="label" x="14" y="26" fill="#4f46e5">BIP39 → seed → VaultKey</text>
+      <text class="caption" x="14" y="46">PBKDF2 seed → blake3_derive</text>
+      <text class="caption" x="14" y="62">recovers the same VaultKey</text>
+    </g>
+
+    <g transform="translate(580, 20)">
+      <rect class="key" width="280" height="78" rx="10"/>
+      <text class="label" x="14" y="26" fill="#059669">VaultKey reconstructed</text>
+      <text class="caption" x="14" y="46">vault unlocks even if device is lost</text>
+      <text class="caption" x="14" y="62">passphrase login still primary path</text>
+    </g>
+
+    <path class="arrow" d="M 280 59 H 308" marker-end="url(#arr)"/>
+    <path class="arrow" d="M 550 59 H 578" marker-end="url(#arr)"/>
+  </g>
+
+  <!-- Footer note -->
+  <g transform="translate(40, 685)">
+    <text class="caption" x="0" y="0">All key material implements Zeroize + ZeroizeOnDrop. Empty passphrases and out-of-range KDF parameters are rejected fail-closed via KdfParams::new validation.</text>
+  </g>
+</svg>

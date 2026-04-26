@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 720" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-labelledby="title desc">
+  <title id="title">Sync v2 wire frame layout</title>
+  <desc id="desc">Byte-level layout of the v2 sync frame: version byte, session id, counter, AEAD ciphertext. Includes AAD construction and the version-dispatch decoder.</desc>
+
+  <defs>
+    <style>
+      .bg { fill: #ffffff; }
+      .title { fill: #0f172a; font-size: 26px; font-weight: 700; }
+      .subtitle { fill: #475569; font-size: 14px; }
+      .section { fill: #0f172a; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+      .label { fill: #0f172a; font-size: 14px; font-weight: 600; }
+      .body { fill: #334155; font-size: 13px; }
+      .mono { font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, monospace; font-size: 12.5px; fill: #0f172a; }
+      .caption { fill: #64748b; font-size: 11.5px; }
+
+      .field-version { fill: #fef3c7; stroke: #f59e0b; stroke-width: 1.6; }
+      .field-sid     { fill: #dbeafe; stroke: #3b82f6; stroke-width: 1.6; }
+      .field-ctr     { fill: #dcfce7; stroke: #16a34a; stroke-width: 1.6; }
+      .field-ct      { fill: #ede9fe; stroke: #8b5cf6; stroke-width: 1.6; }
+
+      .aad           { fill: #fff7ed; stroke: #ea580c; stroke-width: 1.6; }
+      .panel         { fill: #f8fafc; stroke: #e2e8f0; stroke-width: 1; }
+      .err           { fill: #fef2f2; stroke: #dc2626; stroke-width: 1.4; }
+
+      .arrow { fill: none; stroke: #475569; stroke-width: 1.6; }
+      .ok { fill: #059669; font-weight: 700; }
+    </style>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1180" height="720"/>
+
+  <text class="title" x="40" y="56">Sync v2 — On-Wire Frame Layout</text>
+  <text class="subtitle" x="40" y="80">Each frame leaving EncryptedTransport::send is: version || session_id(16) || send_counter_be(8) || aead_ciphertext.</text>
+
+  <!-- Frame ribbon -->
+  <g transform="translate(40, 130)">
+    <text class="section" x="0" y="0">Frame bytes (left → right)</text>
+
+    <g transform="translate(0, 30)">
+      <!-- version -->
+      <g>
+        <rect class="field-version" x="0" y="0" width="80" height="100" rx="8"/>
+        <text class="label" x="40" y="38" text-anchor="middle">0x02</text>
+        <text class="caption" x="40" y="58" text-anchor="middle">version</text>
+        <text class="caption" x="40" y="76" text-anchor="middle">1 B</text>
+      </g>
+      <!-- session id -->
+      <g transform="translate(90, 0)">
+        <rect class="field-sid" width="280" height="100" rx="8"/>
+        <text class="label" x="140" y="38" text-anchor="middle">session_id</text>
+        <text class="caption" x="140" y="58" text-anchor="middle">16 B random · per-transport</text>
+        <text class="mono" x="140" y="80" text-anchor="middle">fill_random::&lt;16&gt;()</text>
+      </g>
+      <!-- counter -->
+      <g transform="translate(380, 0)">
+        <rect class="field-ctr" width="180" height="100" rx="8"/>
+        <text class="label" x="90" y="38" text-anchor="middle">send_counter</text>
+        <text class="caption" x="90" y="58" text-anchor="middle">u64 big-endian · 8 B</text>
+        <text class="caption" x="90" y="80" text-anchor="middle">strictly monotonic</text>
+      </g>
+      <!-- ciphertext -->
+      <g transform="translate(570, 0)">
+        <rect class="field-ct" width="540" height="100" rx="8"/>
+        <text class="label" x="270" y="38" text-anchor="middle">XChaCha20-Poly1305 ciphertext</text>
+        <text class="caption" x="270" y="58" text-anchor="middle">nonce(24) · ciphertext · tag(16)</text>
+        <text class="caption" x="270" y="80" text-anchor="middle">≤ 16 MiB total frame size cap</text>
+      </g>
+    </g>
+
+    <!-- offsets ruler -->
+    <g transform="translate(0, 145)">
+      <line class="arrow" x1="0" y1="0" x2="1110" y2="0"/>
+      <text class="caption" x="0" y="16">0</text>
+      <text class="caption" x="80" y="16">1</text>
+      <text class="caption" x="370" y="16">17</text>
+      <text class="caption" x="560" y="16">25</text>
+      <text class="caption" x="1100" y="16" text-anchor="end">end</text>
+    </g>
+    <text class="caption" x="0" y="180">FRAME_HEADER_LEN = 25 bytes  ·  total frame ≤ MAX_SYNC_MESSAGE_BYTES (16 MiB)</text>
+  </g>
+
+  <!-- AAD construction -->
+  <g transform="translate(40, 350)">
+    <text class="section" x="0" y="0">AEAD AAD bound to every frame</text>
+    <g transform="translate(0, 30)">
+      <rect class="aad" width="540" height="120" rx="10"/>
+      <text class="mono" x="20" y="34">AAD = b"privacysuite:sync:v2"</text>
+      <text class="mono" x="20" y="58">    || session_id(16)</text>
+      <text class="mono" x="20" y="82">    || send_counter.to_be_bytes()</text>
+      <text class="caption" x="20" y="106">tampering with any AAD field flips Poly1305 → SyncError::Decryption.</text>
+    </g>
+  </g>
+
+  <!-- Replay/session checks -->
+  <g transform="translate(620, 350)">
+    <text class="section" x="0" y="0">Receiver-side checks</text>
+    <g transform="translate(0, 30)">
+      <rect class="panel" width="500" height="120" rx="10"/>
+      <text class="caption" x="14" y="22" fill="#0f172a" font-weight="600">First inbound frame</text>
+      <text class="caption" x="14" y="40">→ AEAD verify, then learn peer session_id, set high_water = ctr</text>
+      <text class="caption" x="14" y="68" fill="#0f172a" font-weight="600">Subsequent frames</text>
+      <text class="caption" x="14" y="86">→ session_id MUST match and ctr &gt; high_water, else SyncError::Decryption</text>
+      <text class="caption" x="14" y="106" fill="#dc2626" font-weight="600">replay or splice ⇒ caller must re-establish transport</text>
+    </g>
+  </g>
+
+  <!-- Version dispatch -->
+  <g transform="translate(40, 510)">
+    <text class="section" x="0" y="0">parse_frame() — version-byte dispatch</text>
+
+    <g transform="translate(0, 30)">
+      <rect x="0" y="0" width="260" height="170" rx="10" class="panel"/>
+      <text class="mono" x="14" y="26">match frame[0] {</text>
+      <text class="mono" x="14" y="46">  0x02 → parse v2 header</text>
+      <text class="mono" x="14" y="66">  0x01 → SyncError::Legacy</text>
+      <text class="mono" x="14" y="86">  _    → SyncError::Protocol</text>
+      <text class="mono" x="14" y="106">}</text>
+      <text class="caption" x="14" y="138">truncated &lt; 25 B ⇒ "truncated sync frame"</text>
+      <text class="caption" x="14" y="156">empty ⇒ truncation, not unknown version</text>
+    </g>
+
+    <g transform="translate(280, 30)">
+      <rect x="0" y="0" width="260" height="170" rx="10" class="err"/>
+      <text class="label" x="14" y="22">v1 peer (0x01)</text>
+      <text class="caption" x="14" y="42">SyncError::Legacy("v1 wire format</text>
+      <text class="caption" x="14" y="58">no longer supported — peer must</text>
+      <text class="caption" x="14" y="74">upgrade")</text>
+      <text class="caption" x="14" y="100">decoder does not inspect anything</text>
+      <text class="caption" x="14" y="116">past byte 0 — no timing oracle.</text>
+    </g>
+
+    <g transform="translate(560, 30)">
+      <rect x="0" y="0" width="260" height="170" rx="10" class="err"/>
+      <text class="label" x="14" y="22">unknown version</text>
+      <text class="caption" x="14" y="42">SyncError::Protocol("unknown</text>
+      <text class="caption" x="14" y="58">sync version")</text>
+      <text class="caption" x="14" y="86">covers corruption, future v3+,</text>
+      <text class="caption" x="14" y="102">and frames from non-sync producers.</text>
+    </g>
+
+    <g transform="translate(840, 30)">
+      <rect x="0" y="0" width="280" height="170" rx="10" class="panel"/>
+      <text class="label" x="14" y="22">Future-proofing</text>
+      <text class="caption" x="14" y="42">v3+ bumps the version byte —</text>
+      <text class="caption" x="14" y="58">single-site change in the SDK.</text>
+      <text class="caption" x="14" y="86">Older clients surface a typed</text>
+      <text class="caption" x="14" y="102">error rather than failing the</text>
+      <text class="caption" x="14" y="118">AEAD tag and looking like noise.</text>
+    </g>
+  </g>
+
+  <!-- Footer -->
+  <g transform="translate(40, 700)">
+    <text class="caption" x="0" y="0">Module: privacysuite-core-sdk::sync — see Audit 2 Finding #10 (replay) and Residual Risk #5 (versioning) in the source for the full rationale.</text>
+  </g>
+</svg>

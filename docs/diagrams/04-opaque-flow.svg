@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 820" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-labelledby="title desc">
+  <title id="title">OPAQUE registration and login (RFC 9807 / Ristretto255 / Triple-DH)</title>
+  <desc id="desc">Sequence diagram of OPAQUE registration and login. The server never sees the user's password — even during registration.</desc>
+
+  <defs>
+    <style>
+      .bg { fill: #ffffff; }
+      .title { fill: #0f172a; font-size: 26px; font-weight: 700; }
+      .subtitle { fill: #475569; font-size: 14px; }
+      .section { fill: #0f172a; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+      .label { fill: #0f172a; font-size: 14px; font-weight: 600; }
+      .body { fill: #334155; font-size: 13px; }
+      .mono { font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, monospace; font-size: 12px; fill: #0f172a; }
+      .caption { fill: #64748b; font-size: 11.5px; }
+
+      .actor-client { fill: #ecfdf5; stroke: #059669; stroke-width: 1.6; }
+      .actor-server { fill: #eef2ff; stroke: #4f46e5; stroke-width: 1.6; }
+      .lifeline { stroke: #cbd5e1; stroke-width: 1.4; stroke-dasharray: 4 4; }
+
+      .stage { fill: #f8fafc; stroke: #e2e8f0; stroke-width: 1; }
+      .step  { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.2; }
+      .stepC { fill: #ecfdf5; stroke: #10b981; stroke-width: 1.2; }
+      .stepS { fill: #eef2ff; stroke: #6366f1; stroke-width: 1.2; }
+      .key   { fill: #fffbeb; stroke: #f59e0b; stroke-width: 1.5; }
+
+      .arr-c { fill: none; stroke: #059669; stroke-width: 2; }
+      .arr-s { fill: none; stroke: #4f46e5; stroke-width: 2; }
+      .secret { fill: #dc2626; font-weight: 600; }
+      .ok { fill: #059669; font-weight: 600; }
+    </style>
+    <marker id="arrC" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#059669"/>
+    </marker>
+    <marker id="arrS" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4f46e5"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1180" height="820"/>
+
+  <text class="title" x="40" y="56">OPAQUE Authentication Flow</text>
+  <text class="subtitle" x="40" y="80">Ristretto255 OPRF + Triple-DH (RFC 9807). The server never observes the user's password — not at registration, not at login.</text>
+
+  <!-- Actors -->
+  <g transform="translate(150, 120)">
+    <rect class="actor-client" width="220" height="56" rx="10"/>
+    <text class="label" x="20" y="26" fill="#059669">Client (this SDK)</text>
+    <text class="caption" x="20" y="44">password is local-only · zeroized after finish</text>
+  </g>
+
+  <g transform="translate(810, 120)">
+    <rect class="actor-server" width="220" height="56" rx="10"/>
+    <text class="label" x="20" y="26" fill="#4f46e5">BoomLeft relay server</text>
+    <text class="caption" x="20" y="44">stores envelope; cannot recover password</text>
+  </g>
+
+  <!-- Lifelines -->
+  <line class="lifeline" x1="260" y1="180" x2="260" y2="780"/>
+  <line class="lifeline" x1="920" y1="180" x2="920" y2="780"/>
+
+  <!-- ======== Registration ======== -->
+  <g transform="translate(40, 200)">
+    <rect class="stage" width="1100" height="260" rx="10"/>
+    <text class="section" x="20" y="26">Registration  ·  one-time per account</text>
+
+    <!-- Step 1: client.start -->
+    <g transform="translate(20, 50)">
+      <rect class="stepC" width="220" height="60" rx="8"/>
+      <text class="label" x="12" y="22">1. registration_start</text>
+      <text class="mono" x="12" y="40">blind = OPRF(password)</text>
+      <text class="caption" x="12" y="54">password kept locally only</text>
+    </g>
+
+    <!-- arrow client -> server -->
+    <path class="arr-c" d="M 240 80 H 880" marker-end="url(#arrC)"/>
+    <text class="caption" x="450" y="72" fill="#059669" font-weight="600">RegistrationRequest (blinded element)</text>
+
+    <!-- Step 2: server.start -->
+    <g transform="translate(880, 50)">
+      <rect class="stepS" width="200" height="60" rx="8"/>
+      <text class="label" x="12" y="22">2. ServerRegistration::start</text>
+      <text class="mono" x="12" y="40">evaluate OPRF (blind)</text>
+      <text class="caption" x="12" y="54">using server's OPRF key</text>
+    </g>
+
+    <!-- arrow server -> client -->
+    <path class="arr-s" d="M 880 150 H 240" marker-end="url(#arrS)"/>
+    <text class="caption" x="450" y="142" fill="#4f46e5" font-weight="600">RegistrationResponse (evaluated element + server pubkey)</text>
+
+    <!-- Step 3: client.finish -->
+    <g transform="translate(20, 170)">
+      <rect class="stepC" width="220" height="60" rx="8"/>
+      <text class="label" x="12" y="22">3. registration_finish</text>
+      <text class="mono" x="12" y="40">build envelope · seal cred</text>
+      <text class="caption" x="12" y="54">password zeroized on drop</text>
+    </g>
+
+    <!-- arrow client -> server -->
+    <path class="arr-c" d="M 240 200 H 880" marker-end="url(#arrC)"/>
+    <text class="caption" x="450" y="192" fill="#059669" font-weight="600">RegistrationUpload (encrypted envelope)</text>
+
+    <!-- Step 4: server.finish -->
+    <g transform="translate(880, 170)">
+      <rect class="stepS" width="200" height="60" rx="8"/>
+      <text class="label" x="12" y="22">4. ServerRegistration::finish</text>
+      <text class="mono" x="12" y="40">store password file</text>
+      <text class="caption" x="12" y="54">opaque blob — no password</text>
+    </g>
+  </g>
+
+  <!-- ======== Login ======== -->
+  <g transform="translate(40, 480)">
+    <rect class="stage" width="1100" height="280" rx="10"/>
+    <text class="section" x="20" y="26">Login  ·  every session</text>
+
+    <!-- Step 1: client login_start -->
+    <g transform="translate(20, 50)">
+      <rect class="stepC" width="220" height="60" rx="8"/>
+      <text class="label" x="12" y="22">1. login_start</text>
+      <text class="mono" x="12" y="40">blind = OPRF(password)</text>
+      <text class="caption" x="12" y="54">+ ephemeral DH share</text>
+    </g>
+
+    <path class="arr-c" d="M 240 80 H 880" marker-end="url(#arrC)"/>
+    <text class="caption" x="500" y="72" fill="#059669" font-weight="600">CredentialRequest</text>
+
+    <g transform="translate(880, 50)">
+      <rect class="stepS" width="200" height="60" rx="8"/>
+      <text class="label" x="12" y="22">2. ServerLogin::start</text>
+      <text class="mono" x="12" y="40">OPRF eval · KE share</text>
+      <text class="caption" x="12" y="54">looks up password file</text>
+    </g>
+
+    <path class="arr-s" d="M 880 150 H 240" marker-end="url(#arrS)"/>
+    <text class="caption" x="430" y="142" fill="#4f46e5" font-weight="600">CredentialResponse (envelope + server KE share)</text>
+
+    <g transform="translate(20, 170)">
+      <rect class="stepC" width="220" height="80" rx="8"/>
+      <text class="label" x="12" y="22">3. login_finish</text>
+      <text class="mono" x="12" y="40">unwrap envelope</text>
+      <text class="mono" x="12" y="56">complete Triple-DH</text>
+      <text class="caption" x="12" y="74">password zeroized</text>
+    </g>
+
+    <g transform="translate(880, 170)">
+      <rect class="stepS" width="200" height="80" rx="8"/>
+      <text class="label" x="12" y="22">4. server.finish</text>
+      <text class="mono" x="12" y="40">complete Triple-DH</text>
+      <text class="caption" x="12" y="58">verifies client matches</text>
+      <text class="caption" x="12" y="74">no password disclosed</text>
+    </g>
+
+    <!-- mutual key derivation -->
+    <g transform="translate(420, 170)">
+      <rect class="key" width="320" height="80" rx="10"/>
+      <text class="label" x="14" y="22">SessionKey</text>
+      <text class="caption" x="14" y="40">identical bytes derived on both sides via Triple-DH</text>
+      <text class="caption" x="14" y="58">stored as Zeroizing&lt;Box&lt;[u8]&gt;&gt; — no excess capacity</text>
+      <text class="caption" x="14" y="74">Debug prints "SessionKey(***)"</text>
+    </g>
+
+    <!-- linking arrow into key -->
+    <path class="arr-c" d="M 240 210 H 416" marker-end="url(#arrC)"/>
+    <path class="arr-s" d="M 880 210 H 744" marker-end="url(#arrS)"/>
+  </g>
+
+  <!-- Footer note -->
+  <g transform="translate(40, 790)">
+    <text class="caption" x="0" y="0">If the server is compromised, the password file leaks no credentials it can replay. Wrong-password login fails with the same opaque AuthError::Protocol — UI must render a single generic "Login failed".</text>
+  </g>
+</svg>

@@ -6,4 +6,12 @@
   ships only compiled Rust (cdylib jniLibs) and UniFFI-generated Kotlin
   glue. Consumer apps supply their own AndroidManifest.
 -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:allowBackup="false"
+        android:exported="false"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:usesCleartextTraffic="false" />
+</manifest>

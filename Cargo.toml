@@ -90,7 +90,7 @@ url = "=2"
 rusqlite = { version = "=0.36", features = ["bundled-sqlcipher"], optional = true }
 
 # --- CRDT sync (optional: "sync" feature) ---
-automerge = { version = "=0.8", optional = true }
+automerge = { version = "=0.9", optional = true }
 
 # --- OPAQUE authentication (optional: "auth" feature) ---
 opaque-ke = { version = "=3", optional = true }

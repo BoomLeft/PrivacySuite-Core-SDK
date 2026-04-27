@@ -93,7 +93,7 @@ rusqlite = { version = "=0.36", features = ["bundled-sqlcipher"], optional = tru
 automerge = { version = "=0.8", optional = true }
 
 # --- OPAQUE authentication (optional: "auth" feature) ---
-opaque-ke = { version = "=3", optional = true }
+opaque-ke = { version = "=4", optional = true }
 
 # --- Privacy networking + sync (optional: "sync" / "networking" features) ---
 tokio = { version = "=1", features = ["rt", "net", "io-util", "sync", "time", "macros"], optional = true }

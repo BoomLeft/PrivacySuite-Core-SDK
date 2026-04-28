@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 980" width="440" height="980" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif">
+  <!-- Background -->
+  <rect x="0" y="0" width="440" height="980" fill="#000"/>
+  <!-- Frame -->
+  <rect x="3" y="3" width="434" height="974" fill="none" stroke="#ffffff" stroke-width="2"/>
+
+  <!-- ============================ HEADER ============================ -->
+  <text x="16" y="42" fill="#ffffff" font-size="26" font-weight="900" letter-spacing="-0.5">Product Transparency</text>
+  <text x="16" y="70" fill="#ffffff" font-size="26" font-weight="900" letter-spacing="-0.5">Label</text>
+
+  <!-- Heavy rule -->
+  <rect x="14" y="80" width="412" height="8" fill="#ffffff"/>
+
+  <!-- Product info -->
+  <text x="16" y="106" fill="#ffffff" font-size="14" font-weight="700">PrivacySuite Core SDK</text>
+  <text x="424" y="106" fill="#ffffff" font-size="12" text-anchor="end">Cryptographic Foundation for BoomLeft Apps</text>
+
+  <text x="16" y="124" fill="#ffffff" font-size="12">Desktop · Android · iOS</text>
+  <text x="424" y="124" fill="#ffffff" font-size="12" text-anchor="end">v0.4.0</text>
+
+  <text x="16" y="140" fill="#cccccc" font-size="11">Pure Rust · Tauri 2.x plugin · UniFFI bindings</text>
+
+  <!-- Heavy rule -->
+  <rect x="14" y="148" width="412" height="8" fill="#ffffff"/>
+
+  <!-- ============================ DATA HEADLINE ============================ -->
+  <text x="16" y="172" fill="#ffffff" font-size="11" font-weight="700">Data Leaving Your Device</text>
+
+  <text x="16" y="200" fill="#ffffff" font-size="26" font-weight="900">None</text>
+  <text x="424" y="200" fill="#ffffff" font-size="11" text-anchor="end">Sent to BoomLeft Servers</text>
+
+  <!-- Medium rule -->
+  <rect x="14" y="210" width="412" height="3" fill="#ffffff"/>
+
+  <text x="424" y="227" fill="#ffffff" font-size="11" font-weight="700" text-anchor="end">Detail</text>
+  <line x1="14" y1="232" x2="426" y2="232" stroke="#ffffff" stroke-width="1"/>
+
+  <!-- Detail rows -->
+  <g font-size="12.5" fill="#ffffff">
+    <text x="16" y="247" font-weight="700">Third-Party Data Sharing</text>
+    <text x="424" y="247" font-weight="700" text-anchor="end">None</text>
+    <line x1="14" y1="252" x2="426" y2="252" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="32" y="266">Telemetry / Analytics</text>
+    <text x="424" y="266" text-anchor="end">None</text>
+    <line x1="14" y1="271" x2="426" y2="271" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="32" y="285">Advertising SDKs</text>
+    <text x="424" y="285" text-anchor="end">0</text>
+    <line x1="14" y1="290" x2="426" y2="290" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="32" y="304">Tracking Pixels</text>
+    <text x="424" y="304" text-anchor="end">0</text>
+  </g>
+
+  <!-- Medium rule -->
+  <rect x="14" y="312" width="412" height="3" fill="#ffffff"/>
+
+  <!-- Crypto rows -->
+  <g font-size="12.5" fill="#ffffff">
+    <text x="16" y="330" font-weight="700">Encryption at Rest</text>
+    <text x="424" y="330" font-weight="700" text-anchor="end">XChaCha20-Poly1305</text>
+    <line x1="14" y1="335" x2="426" y2="335" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="32" y="349">Key Derivation</text>
+    <text x="424" y="349" text-anchor="end">Argon2id (m=64MB, t=3, p=4)</text>
+    <line x1="14" y1="354" x2="426" y2="354" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="32" y="368">Local Database</text>
+    <text x="424" y="368" text-anchor="end">SQLCipher (AES-256)</text>
+    <line x1="14" y1="373" x2="426" y2="373" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="16" y="387" font-weight="700">Encryption in Transit</text>
+    <text x="424" y="387" font-weight="700" text-anchor="end">TLS 1.3 · DoH · OHTTP · Tor</text>
+    <line x1="14" y1="392" x2="426" y2="392" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="32" y="406">Tor Integration</text>
+    <text x="424" y="406" text-anchor="end">Optional (external SOCKS5)</text>
+    <line x1="14" y1="411" x2="426" y2="411" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="32" y="425">Certificate Pinning</text>
+    <text x="424" y="425" text-anchor="end">SHA-256 SPKI (constant-time)</text>
+  </g>
+
+  <!-- Medium rule -->
+  <rect x="14" y="433" width="412" height="3" fill="#ffffff"/>
+
+  <!-- Auth rows -->
+  <g font-size="12.5" fill="#ffffff">
+    <text x="16" y="451" font-weight="700">Authentication</text>
+    <text x="424" y="451" font-weight="700" text-anchor="end">OPAQUE (aPAKE, RFC 9807)</text>
+    <line x1="14" y1="456" x2="426" y2="456" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="32" y="470">Zero-Knowledge</text>
+    <text x="424" y="470" text-anchor="end">Yes — full</text>
+    <line x1="14" y1="475" x2="426" y2="475" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="32" y="489">Forward Secrecy</text>
+    <text x="424" y="489" text-anchor="end">Yes (ephemeral X25519 / Ed25519)</text>
+  </g>
+
+  <!-- Medium rule -->
+  <rect x="14" y="497" width="412" height="3" fill="#ffffff"/>
+
+  <!-- Network rows -->
+  <g font-size="12.5" fill="#ffffff">
+    <text x="16" y="515" font-weight="700">Outbound Domains</text>
+    <text x="424" y="515" font-weight="700" text-anchor="end">Configurable per host app</text>
+    <line x1="14" y1="520" x2="426" y2="520" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="32" y="534">Third-Party APIs</text>
+    <text x="424" y="534" text-anchor="end">0</text>
+    <line x1="14" y1="539" x2="426" y2="539" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="32" y="553">Offline Capable</text>
+    <text x="424" y="553" text-anchor="end">Yes (base crate, no network)</text>
+    <line x1="14" y1="558" x2="426" y2="558" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="32" y="572">DNS Leak Protection</text>
+    <text x="424" y="572" text-anchor="end">Yes (DoH / Tor)</text>
+  </g>
+
+  <!-- Heavy rule -->
+  <rect x="14" y="580" width="412" height="8" fill="#ffffff"/>
+
+  <!-- Technical Stack -->
+  <text x="16" y="604" fill="#ffffff" font-size="11" font-weight="700">Technical Stack</text>
+  <line x1="14" y1="609" x2="426" y2="609" stroke="#ffffff" stroke-width="1"/>
+
+  <g font-size="12.5" fill="#ffffff">
+    <text x="16" y="624">Language</text>
+    <text x="424" y="624" text-anchor="end">Rust 2021 · #![forbid(unsafe_code)]</text>
+    <line x1="14" y1="629" x2="426" y2="629" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="16" y="643">Desktop Integration</text>
+    <text x="424" y="643" text-anchor="end">Tauri 2.x plugin</text>
+    <line x1="14" y1="648" x2="426" y2="648" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="16" y="662">Mobile Bindings</text>
+    <text x="424" y="662" text-anchor="end">UniFFI → Kotlin / Swift</text>
+    <line x1="14" y1="667" x2="426" y2="667" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="16" y="681">Sync Protocol</text>
+    <text x="424" y="681" text-anchor="end">Automerge CRDTs (E2EE)</text>
+    <line x1="14" y1="686" x2="426" y2="686" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="16" y="700">Direct Dependencies</text>
+    <text x="424" y="700" text-anchor="end">=-pinned · cargo-deny enforced</text>
+    <line x1="14" y1="705" x2="426" y2="705" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="16" y="719">Open Source</text>
+    <text x="424" y="719" text-anchor="end">Source-available (proprietary)</text>
+    <line x1="14" y1="724" x2="426" y2="724" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="16" y="738">Reproducible Build</text>
+    <text x="424" y="738" text-anchor="end">WIP</text>
+    <line x1="14" y1="743" x2="426" y2="743" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="16" y="757">Code Signing</text>
+    <text x="424" y="757" text-anchor="end">Ed25519 (host apps)</text>
+  </g>
+
+  <!-- Medium rule -->
+  <rect x="14" y="765" width="412" height="3" fill="#ffffff"/>
+
+  <!-- Product-specific -->
+  <text x="16" y="783" fill="#ffffff" font-size="11" font-weight="700">Product-Specific</text>
+  <line x1="14" y1="788" x2="426" y2="788" stroke="#ffffff" stroke-width="1"/>
+
+  <g font-size="12.5" fill="#ffffff">
+    <text x="16" y="803">Cargo Features</text>
+    <text x="424" y="803" text-anchor="end">auth · storage · sync · networking</text>
+    <line x1="14" y1="808" x2="426" y2="808" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="16" y="822">Privacy Network Tiers</text>
+    <text x="424" y="822" text-anchor="end">DoH · OHTTP (RFC 9458) · Tor</text>
+    <line x1="14" y1="827" x2="426" y2="827" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="16" y="841">Recovery</text>
+    <text x="424" y="841" text-anchor="end">BIP39 (24-word mnemonic)</text>
+    <line x1="14" y1="846" x2="426" y2="846" stroke="#ffffff" stroke-width="1"/>
+
+    <text x="16" y="860">Zeroization</text>
+    <text x="424" y="860" text-anchor="end">Zeroize + ZeroizeOnDrop · global</text>
+  </g>
+
+  <!-- Heavy rule -->
+  <rect x="14" y="868" width="412" height="8" fill="#ffffff"/>
+
+  <!-- Subpoena -->
+  <text x="16" y="893" fill="#ffffff" font-size="13" font-weight="900" letter-spacing="-0.3">Subpoena Disclosure</text>
+
+  <g font-size="11" fill="#ffffff">
+    <text x="16" y="910">Nothing. The SDK is a local library; no data is stored or transmitted by</text>
+    <text x="16" y="924">the SDK itself. The optional sync relay holds only ciphertext it cannot</text>
+    <text x="16" y="938">decrypt. Equivalent to Signal's disclosure posture.</text>
+  </g>
+
+  <line x1="14" y1="948" x2="426" y2="948" stroke="#ffffff" stroke-width="1"/>
+
+  <!-- Footer -->
+  <g font-size="9.5" fill="#bbbbbb">
+    <text x="16" y="961">* Describes the maximum data BoomLeft could produce in response to valid</text>
+    <text x="16" y="972">legal process. Format v1.0 · Verifiable against this repository.</text>
+  </g>
+</svg>
